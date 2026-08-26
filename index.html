@@ -46,6 +46,9 @@
   #tableWrap th[aria-sort="descending"]::after { content: ' ▼'; }
   #tableWrap tbody tr:nth-child(even) { background: #fafafa; }
   #tableFilter { flex: 1; min-width: 200px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+
+  .row.slicer { padding-bottom: 12px; border-bottom: 1px dashed #c3c9cf; }
+  .slice-count { font-size: .85em; color: #495057; font-style: italic; }
   .msg { text-align: center; padding: 50px 20px; color: #6c757d; }
   .msg.error { color: #c82333; }
 </style>
@@ -89,6 +92,12 @@
     <h3 class="tab-main-title">基本圖表產生</h3>
     <div id="basicConfig" class="chart-config" hidden>
       <h4>圖表設定</h4>
+      <div class="row slicer">
+        <label for="basicSliceCol">先篩選 (可選):</label>
+        <select id="basicSliceCol"></select>
+        <select id="basicSliceVal"></select>
+        <span id="basicSliceCount" class="slice-count"></span>
+      </div>
       <div class="row"><label for="basicX">X 軸 (類別/數值):</label><select id="basicX"></select></div>
       <div class="row"><label for="basicY">Y 軸 (數值):</label><select id="basicY"></select></div>
       <div class="row"><label for="basicType">圖表類型:</label>
@@ -110,6 +119,12 @@
     <h3 class="tab-main-title">組合圖表產生</h3>
     <div id="comboConfig" class="chart-config" hidden>
       <h4>圖表設定</h4>
+      <div class="row slicer">
+        <label for="comboSliceCol">先篩選 (可選):</label>
+        <select id="comboSliceCol"></select>
+        <select id="comboSliceVal"></select>
+        <span id="comboSliceCount" class="slice-count"></span>
+      </div>
       <div class="row"><label for="comboX">X 軸 (類別/數值):</label><select id="comboX"></select></div>
 
       <div class="series-config">
@@ -214,16 +229,62 @@ const toolbox = {
   }
 };
 
+// ---------- 資料切片 ----------
+// 兩個圖表分頁共用：先挑一個欄位、再挑一個值，之後的 X/Y 都只吃這一刀切出來的列。
+// 例如「年度 = 105」之後，X 選計畫名稱、Y 選預算數，就是該年度各計畫的預算。
+function initSlicer(prefix) {
+  const col = $(prefix + 'SliceCol'), val = $(prefix + 'SliceVal');
+  fillSelect(col, headers, '--不篩選--');
+  val.replaceChildren(new Option('--全部--', ''));
+  val.disabled = true;
+  $(prefix + 'SliceCount').textContent = '';
+
+  col.onchange = () => {
+    if (!col.value) {
+      val.replaceChildren(new Option('--全部--', ''));
+      val.disabled = true;
+    } else {
+      const vals = [...new Set(rows.map(r => String(r[col.value] ?? '')))]
+        .sort((a, b) => {
+          const na = num(a), nb = num(b);
+          return (na !== null && nb !== null) ? na - nb : a.localeCompare(b, 'zh-Hant');
+        });
+      fillSelect(val, vals, '--全部--');
+      val.disabled = false;
+    }
+    val.onchange();
+  };
+  val.onchange = () => {
+    const n = slice(prefix).length;
+    $(prefix + 'SliceCount').textContent =
+      col.value && val.value ? `符合 ${n} 筆 (共 ${rows.length} 筆)` : `全部 ${rows.length} 筆`;
+  };
+  col.onchange();
+}
+
+/** 回傳目前切片後的列；沒選欄位或沒選值就是全部。 */
+function slice(prefix) {
+  const col = $(prefix + 'SliceCol').value, val = $(prefix + 'SliceVal').value;
+  if (!col || !val) return rows;
+  return rows.filter(r => String(r[col] ?? '') === val);
+}
+
+/** 切片條件放在副標題，避免主標題太長壓到右上角工具列 */
+function sliceLabel(prefix) {
+  const col = $(prefix + 'SliceCol').value, val = $(prefix + 'SliceVal').value;
+  return col && val ? `篩選：${col} = ${val}` : '';
+}
+
 /** 依圖表類型組出 ECharts series；xField 只在 scatter 用得到。 */
-function buildSeries(name, type, xField, yField) {
+function buildSeries(src, name, type, xField, yField) {
   if (type === 'scatter') {
     return {
       name, type: 'scatter',
-      data: rows.map(r => [num(r[xField]), num(r[yField])])
-                .filter(p => p[0] !== null && p[1] !== null)
+      data: src.map(r => [num(r[xField]), num(r[yField])])
+               .filter(p => p[0] !== null && p[1] !== null)
     };
   }
-  const data = rows.map(r => num(r[yField]));
+  const data = src.map(r => num(r[yField]));
   if (type === 'area') return { name, type: 'line', areaStyle: {}, data, connectNulls: false };
   if (type === 'line') return { name, type: 'line', data };
   return { name, type: 'bar', data };   // column / bar 都是 bar，方向由座標軸決定
@@ -268,6 +329,9 @@ $('fileInput').addEventListener('change', e => {
       fillSelect($('comboY2'), headers, '--無(系列2)--');
       $('comboType1').value = 'column';
       $('comboType2').value = 'line';
+
+      initSlicer('basic');
+      initSlicer('combo');
 
       sortState = { col: null, dir: 1 };
       renderTable();
@@ -415,11 +479,13 @@ $('basicGo').addEventListener('click', () => {
   if (!rows.length) return alert('基本圖：沒有可供繪製圖表的資料！');
 
   try {
-    const title = { text: `基本圖: ${y} 對 ${x}`, left: 'center' };
+    const src = slice('basic');
+    if (!src.length) return showMessage('basicChart', '篩選後沒有符合的資料。', true);
+    const title = { text: `基本圖: ${y} 對 ${x}`, subtext: sliceLabel('basic'), left: 'center' };
 
     if (type === 'pie') {
-      const data = rows.map(r => ({ name: String(r[x] ?? ''), value: num(r[y]) }))
-                       .filter(d => d.value !== null);
+      const data = src.map(r => ({ name: String(r[x] ?? ''), value: num(r[y]) }))
+                      .filter(d => d.value !== null);
       if (!data.length) return showMessage('basicChart', `欄位「${y}」沒有可用的數值。`, true);
       return render('basicChart', {
         title, toolbox, tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
@@ -429,18 +495,18 @@ $('basicGo').addEventListener('click', () => {
       });
     }
 
-    const series = [buildSeries(y, type, x, y)];
+    const series = [buildSeries(src, y, type, x, y)];
     const horizontal = type === 'bar';
     const valueAxis = { type: 'value', name: y };
     const catAxis = type === 'scatter'
       ? { type: 'value', name: x }
-      : { type: 'category', name: x, data: rows.map(r => String(r[x] ?? '')) };
+      : { type: 'category', name: x, data: src.map(r => String(r[x] ?? '')) };
 
     render('basicChart', {
       title, toolbox,
       tooltip: { trigger: type === 'scatter' ? 'item' : 'axis' },
       legend: { bottom: 0 },
-      grid: { left: 70, right: 40, top: 60, bottom: 60 },
+      grid: { left: 70, right: 40, top: 80, bottom: 60 },
       xAxis: horizontal ? valueAxis : catAxis,
       yAxis: horizontal ? catAxis : valueAxis,
       series
@@ -461,12 +527,14 @@ $('comboGo').addEventListener('click', () => {
   if (!rows.length) return alert('組合圖：沒有可供繪製圖表的資料！');
 
   try {
-    const series = [{ ...buildSeries(y1, t1, x, y1), yAxisIndex: 0 }];
+    const src = slice('combo');
+    if (!src.length) return showMessage('comboChart', '篩選後沒有符合的資料。', true);
+    const series = [{ ...buildSeries(src, y1, t1, x, y1), yAxisIndex: 0 }];
     const yAxis = [{ type: 'value', name: y1 }];
     let title = `${y1} 對 ${x}`;
 
     if (y2) {
-      series.push({ ...buildSeries(y2, t2, x, y2), yAxisIndex: 1 });
+      series.push({ ...buildSeries(src, y2, t2, x, y2), yAxisIndex: 1 });
       yAxis.push({ type: 'value', name: y2 });   // 第二軸畫在右側
       title += ` & ${y2}`;
     }
@@ -474,14 +542,14 @@ $('comboGo').addEventListener('click', () => {
     const anyScatter = t1 === 'scatter' || (y2 && t2 === 'scatter');
     const xAxis = anyScatter
       ? { type: 'value', name: x }
-      : { type: 'category', name: x, data: rows.map(r => String(r[x] ?? '')) };
+      : { type: 'category', name: x, data: src.map(r => String(r[x] ?? '')) };
 
     render('comboChart', {
-      title: { text: `組合圖: ${title}`, left: 'center' },
+      title: { text: `組合圖: ${title}`, subtext: sliceLabel('combo'), left: 'center' },
       toolbox,
       tooltip: { trigger: anyScatter ? 'item' : 'axis', axisPointer: { type: 'cross' } },
       legend: { bottom: 0 },
-      grid: { left: 70, right: 70, top: 60, bottom: 60 },
+      grid: { left: 70, right: 70, top: 80, bottom: 60 },
       xAxis, yAxis, series
     });
   } catch (err) {
