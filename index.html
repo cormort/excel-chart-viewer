@@ -72,6 +72,10 @@
         <label for="fileInput">選擇檔案 (Excel/CSV):</label>
         <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
       </div>
+      <div class="row" id="sheetRow" hidden>
+        <label for="sheetSelect">工作表:</label>
+        <select id="sheetSelect"></select>
+      </div>
       <div id="fileLoadStatus" class="file-load-status">尚未選擇檔案</div>
     </div>
   </section>
@@ -95,8 +99,18 @@
       <div class="row slicer">
         <label for="basicSliceCol">先篩選 (可選):</label>
         <select id="basicSliceCol"></select>
-        <select id="basicSliceVal"></select>
+        <select id="basicSliceVal" multiple size="5"></select>
         <span id="basicSliceCount" class="slice-count"></span>
+      </div>
+      <div class="row slicer">
+        <label for="basicAgg">彙總方式:</label>
+        <select id="basicAgg">
+          <option value="none">無 (每列一個點)</option>
+          <option value="sum">加總 (Sum)</option>
+          <option value="avg">平均 (Average)</option>
+          <option value="count">筆數 (Count)</option>
+        </select>
+        <span class="slice-count">X 軸有重複值時，決定同一類別要怎麼合併</span>
       </div>
       <div class="row"><label for="basicX">X 軸 (類別/數值):</label><select id="basicX"></select></div>
       <div class="row"><label for="basicY">Y 軸 (數值):</label><select id="basicY"></select></div>
@@ -122,8 +136,18 @@
       <div class="row slicer">
         <label for="comboSliceCol">先篩選 (可選):</label>
         <select id="comboSliceCol"></select>
-        <select id="comboSliceVal"></select>
+        <select id="comboSliceVal" multiple size="5"></select>
         <span id="comboSliceCount" class="slice-count"></span>
+      </div>
+      <div class="row slicer">
+        <label for="comboAgg">彙總方式:</label>
+        <select id="comboAgg">
+          <option value="none">無 (每列一個點)</option>
+          <option value="sum">加總 (Sum)</option>
+          <option value="avg">平均 (Average)</option>
+          <option value="count">筆數 (Count)</option>
+        </select>
+        <span class="slice-count">X 軸有重複值時，決定同一類別要怎麼合併</span>
       </div>
       <div class="row"><label for="comboX">X 軸 (類別/數值):</label><select id="comboX"></select></div>
 
@@ -230,53 +254,104 @@ const toolbox = {
 };
 
 // ---------- 資料切片 ----------
-// 兩個圖表分頁共用：先挑一個欄位、再挑一個值，之後的 X/Y 都只吃這一刀切出來的列。
-// 例如「年度 = 105」之後，X 選計畫名稱、Y 選預算數，就是該年度各計畫的預算。
+// 先挑一個欄位、再挑一或多個值，之後的 X/Y 只吃切出來的列。
+// 統計上這是把 panel data（縱橫資料，多個體 × 多時點）降成一個維度：
+//   固定年度 → 橫斷面 (cross-sectional)；固定計畫 → 時間序列 (time series)。
+// 多選時每個值各自成為一條 series，方便跨組比較。
 function initSlicer(prefix) {
   const col = $(prefix + 'SliceCol'), val = $(prefix + 'SliceVal');
   fillSelect(col, headers, '--不篩選--');
-  val.replaceChildren(new Option('--全部--', ''));
+  val.replaceChildren();
   val.disabled = true;
-  $(prefix + 'SliceCount').textContent = '';
 
   col.onchange = () => {
     if (!col.value) {
-      val.replaceChildren(new Option('--全部--', ''));
+      val.replaceChildren();
       val.disabled = true;
     } else {
-      const vals = [...new Set(rows.map(r => String(r[col.value] ?? '')))]
-        .sort((a, b) => {
-          const na = num(a), nb = num(b);
-          return (na !== null && nb !== null) ? na - nb : a.localeCompare(b, 'zh-Hant');
-        });
-      fillSelect(val, vals, '--全部--');
+      const vals = [...new Set(rows.map(r => String(r[col.value] ?? '')))].sort(cmpValue);
+      val.replaceChildren(...vals.map(v => new Option(v, v)));
       val.disabled = false;
     }
     val.onchange();
   };
   val.onchange = () => {
-    const n = slice(prefix).length;
-    $(prefix + 'SliceCount').textContent =
-      col.value && val.value ? `符合 ${n} 筆 (共 ${rows.length} 筆)` : `全部 ${rows.length} 筆`;
+    const picked = sliceValues(prefix);
+    $(prefix + 'SliceCount').textContent = picked.length
+      ? `已選 ${picked.length} 組，共 ${picked.reduce((n, v) => n + slice(prefix, v).length, 0)} 筆 / ${rows.length} 筆`
+      : `未篩選，全部 ${rows.length} 筆`;
   };
   col.onchange();
 }
 
-/** 回傳目前切片後的列；沒選欄位或沒選值就是全部。 */
-function slice(prefix) {
-  const col = $(prefix + 'SliceCol').value, val = $(prefix + 'SliceVal').value;
-  if (!col || !val) return rows;
+/** 兩邊都是數字就比數值，否則比字串 */
+function cmpValue(a, b) {
+  const na = num(a), nb = num(b);
+  return (na !== null && nb !== null) ? na - nb : String(a).localeCompare(String(b), 'zh-Hant');
+}
+
+/** 目前選了哪幾個切片值；沒選欄位或沒選值都回傳 [] 代表不切 */
+function sliceValues(prefix) {
+  if (!$(prefix + 'SliceCol').value) return [];
+  return [...$(prefix + 'SliceVal').selectedOptions].map(o => o.value);
+}
+
+/** 取出某個切片值對應的列 */
+function slice(prefix, val) {
+  const col = $(prefix + 'SliceCol').value;
+  if (!col) return rows;
   return rows.filter(r => String(r[col] ?? '') === val);
 }
 
-/** 切片條件放在副標題，避免主標題太長壓到右上角工具列 */
-function sliceLabel(prefix) {
-  const col = $(prefix + 'SliceCol').value, val = $(prefix + 'SliceVal').value;
-  return col && val ? `篩選：${col} = ${val}` : '';
+/** 這次要畫幾組資料。不切片時就是單一組（名稱空字串）。 */
+function sliceGroups(prefix) {
+  const picked = sliceValues(prefix);
+  return picked.length ? picked.map(v => ({ label: v, src: slice(prefix, v) }))
+                       : [{ label: '', src: rows }];
 }
 
-/** 依圖表類型組出 ECharts series；xField 只在 scatter 用得到。 */
-function buildSeries(src, name, type, xField, yField) {
+/** 切片與彙總條件放在副標題，避免主標題太長壓到右上角工具列 */
+function sliceLabel(prefix) {
+  const col = $(prefix + 'SliceCol').value, picked = sliceValues(prefix);
+  const agg = $(prefix + 'Agg');
+  const parts = [];
+  if (picked.length) parts.push(`篩選：${col} = ${picked.join('、')}`);
+  if (agg.value !== 'none') parts.push(`彙總：${agg.selectedOptions[0].textContent.split(' ')[0]}`);
+  return parts.join('　|　');
+}
+
+// ---------- 彙總 ----------
+// agg === 'none' 時每一列就是一個點；否則依 X 值分組後合併。
+function categoriesOf(groups, xField, agg) {
+  if (agg === 'none') return groups[0].src.map(r => String(r[xField] ?? ''));
+  const seen = new Set();
+  groups.forEach(g => g.src.forEach(r => seen.add(String(r[xField] ?? ''))));
+  return [...seen].sort(cmpValue);
+}
+
+function aggregate(src, xField, yField, agg, categories) {
+  if (agg === 'none') return src.map(r => num(r[yField]));
+
+  const acc = new Map();   // X 值 -> {sum, n, rows}
+  for (const r of src) {
+    const k = String(r[xField] ?? '');
+    const cur = acc.get(k) ?? { sum: 0, n: 0, rows: 0 };
+    cur.rows++;
+    const v = num(r[yField]);
+    if (v !== null) { cur.sum += v; cur.n++; }
+    acc.set(k, cur);
+  }
+  return categories.map(k => {
+    const c = acc.get(k);
+    if (!c) return null;                    // 這組沒有這個類別 → 留白，不要當成 0
+    if (agg === 'count') return c.rows;
+    if (!c.n) return null;                  // 有列，但 Y 全是非數值
+    return agg === 'sum' ? c.sum : c.sum / c.n;
+  });
+}
+
+/** 依圖表類型組出 ECharts series。scatter 不吃彙總（本來就是逐點散佈）。 */
+function buildSeries(src, name, type, xField, yField, agg, categories) {
   if (type === 'scatter') {
     return {
       name, type: 'scatter',
@@ -284,15 +359,22 @@ function buildSeries(src, name, type, xField, yField) {
                .filter(p => p[0] !== null && p[1] !== null)
     };
   }
-  const data = src.map(r => num(r[yField]));
+  const data = aggregate(src, xField, yField, agg, categories);
   if (type === 'area') return { name, type: 'line', areaStyle: {}, data, connectNulls: false };
   if (type === 'line') return { name, type: 'line', data };
   return { name, type: 'bar', data };   // column / bar 都是 bar，方向由座標軸決定
 }
 
+/** 多組資料要疊在同一個類別軸上，卻沒選彙總 → 類別對不齊，講清楚而不是硬畫 */
+function needsAgg(groups, type, agg) {
+  return groups.length > 1 && type !== 'scatter' && type !== 'pie' && agg === 'none';
+}
+
 // ---------- 讀檔 ----------
-$('fileInput').addEventListener('change', e => {
-  const file = e.target.files[0];
+let workbook = null;    // 留著整本活頁簿，才能切換工作表而不用重讀檔
+let fileName = '';
+
+function resetUi() {
   rows = []; headers = [];
   $('basicConfig').hidden = $('comboConfig').hidden = $('budgetConfig').hidden = true;
   document.querySelectorAll('.tab-button:not([data-tab="loadFileTab"])').forEach(b => b.disabled = true);
@@ -302,44 +384,30 @@ $('fileInput').addEventListener('change', e => {
   showMessage('tableWrap', '請先於「讀取檔案」分頁載入資料。');
   $('tableFilter').value = '';
   $('tableCount').textContent = '';
+}
+
+$('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  workbook = null;
+  $('sheetRow').hidden = true;
+  resetUi();
 
   if (!file) { $('fileLoadStatus').textContent = '未選擇檔案。'; return; }
-  $('fileLoadStatus').textContent = `正在讀取檔案: ${file.name}...`;
+  fileName = file.name;
+  $('fileLoadStatus').textContent = `正在讀取檔案: ${fileName}...`;
 
   const reader = new FileReader();
   reader.onerror = () => { $('fileLoadStatus').textContent = '檔案讀取時發生錯誤。'; };
   reader.onload = ev => {
     try {
       // SheetJS 也吃 CSV（含 BOM），所以不需要另一套 CSV parser
-      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: true });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      if (!ws) throw new Error('檔案中沒有工作表。');
+      workbook = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: true });
+      if (!workbook.SheetNames.length) throw new Error('檔案中沒有工作表。');
 
-      const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
-      if (matrix.length < 2) throw new Error(`檔案 "${file.name}" 為空或只有標頭。`);
-
-      // 標頭一律取第一列，避免用第一筆資料的 key 而漏掉空白欄
-      headers = matrix[0].map((h, i) => (h === null || h === '') ? `欄位${i + 1}` : String(h).trim());
-      rows = matrix.slice(1).map(arr => Object.fromEntries(headers.map((h, i) => [h, arr[i] ?? null])));
-
-      fillSelect($('basicX'), headers, '--選擇欄位--');
-      fillSelect($('basicY'), headers, '--選擇欄位--');
-      fillSelect($('comboX'), headers, '--選擇欄位--');
-      fillSelect($('comboY1'), headers, '--選擇欄位--');
-      fillSelect($('comboY2'), headers, '--無(系列2)--');
-      $('comboType1').value = 'column';
-      $('comboType2').value = 'line';
-
-      initSlicer('basic');
-      initSlicer('combo');
-
-      sortState = { col: null, dir: 1 };
-      renderTable();
-
-      $('basicConfig').hidden = $('comboConfig').hidden = false;
-      document.querySelectorAll('.tab-button:not([data-tab="loadFileTab"])').forEach(b => b.disabled = false);
-      setupBudgetTab();   // 欄位不合就會把「預算決算」分頁再關掉，所以要排在啟用之後
-      $('fileLoadStatus').textContent = `檔案 "${file.name}" 載入完成（${rows.length} 筆）。請切換至「基本圖」或「組合圖」分頁設定圖表。`;
+      // 只有一個工作表就別占版面（CSV 一定只有一個）
+      $('sheetRow').hidden = workbook.SheetNames.length < 2;
+      $('sheetSelect').replaceChildren(...workbook.SheetNames.map(n => new Option(n, n)));
+      loadSheet(workbook.SheetNames[0]);
     } catch (err) {
       console.error('檔案處理錯誤:', err);
       $('fileLoadStatus').textContent = '檔案處理失敗: ' + err.message;
@@ -347,6 +415,53 @@ $('fileInput').addEventListener('change', e => {
   };
   reader.readAsArrayBuffer(file);
 });
+
+$('sheetSelect').addEventListener('change', e => {
+  resetUi();
+  try {
+    loadSheet(e.target.value);
+  } catch (err) {
+    console.error('工作表處理錯誤:', err);
+    $('fileLoadStatus').textContent = '工作表處理失敗: ' + err.message;
+  }
+});
+
+/** 把某個工作表讀成 headers / rows，並重建所有分頁的控制項。 */
+function loadSheet(sheetName) {
+  const ws = workbook.Sheets[sheetName];
+  if (!ws) throw new Error(`找不到工作表「${sheetName}」。`);
+
+  const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+  if (matrix.length < 2) throw new Error(`工作表「${sheetName}」為空或只有標頭。`);
+
+  // 標頭一律取第一列，避免用第一筆資料的 key 而漏掉空白欄
+  headers = matrix[0].map((h, i) => (h === null || h === '') ? `欄位${i + 1}` : String(h).trim());
+  rows = matrix.slice(1).map(arr => Object.fromEntries(headers.map((h, i) => [h, arr[i] ?? null])));
+
+  fillSelect($('basicX'), headers, '--選擇欄位--');
+  fillSelect($('basicY'), headers, '--選擇欄位--');
+  fillSelect($('comboX'), headers, '--選擇欄位--');
+  fillSelect($('comboY1'), headers, '--選擇欄位--');
+  fillSelect($('comboY2'), headers, '--無(系列2)--');
+  $('comboType1').value = 'column';
+  $('comboType2').value = 'line';
+  $('basicAgg').value = $('comboAgg').value = 'none';
+
+  initSlicer('basic');
+  initSlicer('combo');
+  restorePrefs();          // 同樣欄位組合的檔案，還原上次的選擇
+
+  sortState = { col: null, dir: 1 };
+  renderTable();
+
+  $('basicConfig').hidden = $('comboConfig').hidden = false;
+  document.querySelectorAll('.tab-button:not([data-tab="loadFileTab"])').forEach(b => b.disabled = false);
+  setupBudgetTab();   // 欄位不合就會把「預算決算」分頁再關掉，所以要排在啟用之後
+
+  const where = workbook.SheetNames.length > 1 ? `工作表「${sheetName}」` : `檔案 "${fileName}"`;
+  $('fileLoadStatus').textContent =
+    `${where} 載入完成（${rows.length} 筆）。請切換至上方的分頁檢視資料或設定圖表。`;
+}
 
 // ---------- 資料表格 ----------
 const MAX_TABLE_ROWS = 2000;   // ponytail: 一次全畫，超過就截斷；真要看更多再上虛擬捲動
@@ -474,18 +589,26 @@ $('projectSelect').addEventListener('change', renderBudgetChart);
 
 // ---------- 基本圖 ----------
 $('basicGo').addEventListener('click', () => {
+  savePrefs();   // 存下實際畫圖當下的設定，不只是下拉變動的當下
   const x = $('basicX').value, y = $('basicY').value, type = $('basicType').value;
+  const agg = $('basicAgg').value;
   if (!x || !y) return alert('基本圖：請選擇 X 軸和 Y 軸的欄位！');
   if (!rows.length) return alert('基本圖：沒有可供繪製圖表的資料！');
 
   try {
-    const src = slice('basic');
-    if (!src.length) return showMessage('basicChart', '篩選後沒有符合的資料。', true);
+    const groups = sliceGroups('basic').filter(g => g.src.length);
+    if (!groups.length) return showMessage('basicChart', '篩選後沒有符合的資料。', true);
+    if (needsAgg(groups, type, agg)) {
+      return showMessage('basicChart', '選了多組篩選值時請一併選擇彙總方式，否則各組的 X 類別無法對齊。', true);
+    }
+
     const title = { text: `基本圖: ${y} 對 ${x}`, subtext: sliceLabel('basic'), left: 'center' };
 
     if (type === 'pie') {
-      const data = src.map(r => ({ name: String(r[x] ?? ''), value: num(r[y]) }))
-                      .filter(d => d.value !== null);
+      // 圓餅圖只畫第一組；要跨組比較請改用直條或折線
+      const cats = categoriesOf([groups[0]], x, agg);
+      const vals = aggregate(groups[0].src, x, y, agg, cats);
+      const data = cats.map((name, i) => ({ name, value: vals[i] })).filter(d => d.value !== null);
       if (!data.length) return showMessage('basicChart', `欄位「${y}」沒有可用的數值。`, true);
       return render('basicChart', {
         title, toolbox, tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
@@ -495,17 +618,19 @@ $('basicGo').addEventListener('click', () => {
       });
     }
 
-    const series = [buildSeries(src, y, type, x, y)];
+    const categories = categoriesOf(groups, x, type === 'scatter' ? 'none' : agg);
+    const series = groups.map(g => buildSeries(g.src, g.label || y, type, x, y, agg, categories));
+
     const horizontal = type === 'bar';
     const valueAxis = { type: 'value', name: y };
     const catAxis = type === 'scatter'
       ? { type: 'value', name: x }
-      : { type: 'category', name: x, data: src.map(r => String(r[x] ?? '')) };
+      : { type: 'category', name: x, data: categories };
 
     render('basicChart', {
       title, toolbox,
       tooltip: { trigger: type === 'scatter' ? 'item' : 'axis' },
-      legend: { bottom: 0 },
+      legend: { type: 'scroll', bottom: 0 },
       grid: { left: 70, right: 40, top: 80, bottom: 60 },
       xAxis: horizontal ? valueAxis : catAxis,
       yAxis: horizontal ? catAxis : valueAxis,
@@ -519,36 +644,49 @@ $('basicGo').addEventListener('click', () => {
 
 // ---------- 組合圖 ----------
 $('comboGo').addEventListener('click', () => {
+  savePrefs();   // 存下實際畫圖當下的設定，不只是下拉變動的當下
   const x = $('comboX').value;
   const y1 = $('comboY1').value, t1 = $('comboType1').value;
   const y2 = $('comboY2').value, t2 = $('comboType2').value;
+  const agg = $('comboAgg').value;
 
   if (!x || !y1) return alert('組合圖：請至少選擇 X 軸和系列 1 的 Y 軸欄位！');
   if (!rows.length) return alert('組合圖：沒有可供繪製圖表的資料！');
 
   try {
-    const src = slice('combo');
-    if (!src.length) return showMessage('comboChart', '篩選後沒有符合的資料。', true);
-    const series = [{ ...buildSeries(src, y1, t1, x, y1), yAxisIndex: 0 }];
+    const groups = sliceGroups('combo').filter(g => g.src.length);
+    if (!groups.length) return showMessage('comboChart', '篩選後沒有符合的資料。', true);
+
+    const anyScatter = t1 === 'scatter' || (y2 && t2 === 'scatter');
+    if (needsAgg(groups, anyScatter ? 'scatter' : t1, agg)) {
+      return showMessage('comboChart', '選了多組篩選值時請一併選擇彙總方式，否則各組的 X 類別無法對齊。', true);
+    }
+
+    const categories = categoriesOf(groups, x, anyScatter ? 'none' : agg);
+    // 只有一組時就用欄位名當系列名，多組才加上組別後綴
+    const named = (yField, label) => groups.length > 1 ? `${yField} (${label})` : yField;
+
+    const series = groups.map(g =>
+      ({ ...buildSeries(g.src, named(y1, g.label), t1, x, y1, agg, categories), yAxisIndex: 0 }));
     const yAxis = [{ type: 'value', name: y1 }];
     let title = `${y1} 對 ${x}`;
 
     if (y2) {
-      series.push({ ...buildSeries(src, y2, t2, x, y2), yAxisIndex: 1 });
+      groups.forEach(g => series.push(
+        { ...buildSeries(g.src, named(y2, g.label), t2, x, y2, agg, categories), yAxisIndex: 1 }));
       yAxis.push({ type: 'value', name: y2 });   // 第二軸畫在右側
       title += ` & ${y2}`;
     }
 
-    const anyScatter = t1 === 'scatter' || (y2 && t2 === 'scatter');
     const xAxis = anyScatter
       ? { type: 'value', name: x }
-      : { type: 'category', name: x, data: src.map(r => String(r[x] ?? '')) };
+      : { type: 'category', name: x, data: categories };
 
     render('comboChart', {
       title: { text: `組合圖: ${title}`, subtext: sliceLabel('combo'), left: 'center' },
       toolbox,
       tooltip: { trigger: anyScatter ? 'item' : 'axis', axisPointer: { type: 'cross' } },
-      legend: { bottom: 0 },
+      legend: { type: 'scroll', bottom: 0 },
       grid: { left: 70, right: 70, top: 80, bottom: 60 },
       xAxis, yAxis, series
     });
@@ -557,6 +695,50 @@ $('comboGo').addEventListener('click', () => {
     showMessage('comboChart', '繪製組合圖表失敗: ' + err.message, true);
   }
 });
+
+// ---------- 記住上次的選擇 ----------
+// 以「欄位組合」當 key，換到同樣格式的檔案時自動還原設定。
+// ponytail: 放 localStorage，清瀏覽器資料就沒了；這種便利性設定不值得更重的儲存。
+const PREF_IDS = ['basicSliceCol', 'basicSliceVal', 'basicAgg', 'basicX', 'basicY', 'basicType',
+                  'comboSliceCol', 'comboSliceVal', 'comboAgg', 'comboX', 'comboY1', 'comboType1',
+                  'comboY2', 'comboType2'];
+
+const prefKey = () => 'excel-chart-viewer:' + headers.join('|');
+
+function savePrefs() {
+  if (!headers.length) return;
+  const data = {};
+  for (const id of PREF_IDS) {
+    const el = $(id);
+    data[id] = el.multiple ? [...el.selectedOptions].map(o => o.value) : el.value;
+  }
+  try { localStorage.setItem(prefKey(), JSON.stringify(data)); } catch { /* 無痕模式會丟例外，忽略 */ }
+}
+
+function restorePrefs() {
+  let data;
+  try { data = JSON.parse(localStorage.getItem(prefKey()) || 'null'); } catch { return; }
+  if (!data) return;
+  // 先還原篩選欄位並觸發 onchange，值的選項才會存在
+  for (const p of ['basic', 'combo']) {
+    const col = $(p + 'SliceCol');
+    if (data[col.id] && [...col.options].some(o => o.value === data[col.id])) {
+      col.value = data[col.id];
+      col.onchange();
+    }
+  }
+  for (const id of PREF_IDS) {
+    const el = $(id), saved = data[id];
+    if (saved === undefined) continue;
+    if (el.multiple) [...el.options].forEach(o => { o.selected = saved.includes(o.value); });
+    else if ([...el.options].some(o => o.value === saved)) el.value = saved;
+  }
+  $('basicSliceVal').onchange();
+  $('comboSliceVal').onchange();
+}
+
+document.querySelectorAll('#basicConfig select, #comboConfig select')
+  .forEach(el => el.addEventListener('change', savePrefs));
 </script>
 </body>
 </html>
