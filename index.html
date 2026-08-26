@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Excel/CSV 讀取與圖表產生器</title>
+
+<!-- SheetJS (Apache-2.0) 讀 xlsx/xls/csv；ECharts (Apache-2.0) 繪圖 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.6.0/echarts.min.js"></script>
+
+<style>
+  body { font-family: sans-serif; margin: 0; background: #f4f4f4; }
+  .app-shell { max-width: 1200px; margin: 20px auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.1); }
+  h2, h4 { text-align: center; color: #333; }
+  h3.tab-main-title { margin-top: 0; text-align: left; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+
+  .tab-bar { display: flex; border-bottom: 2px solid #ccc; margin-bottom: 20px; }
+  .tab-button { padding: 10px 20px; cursor: pointer; border: none; background: transparent; font-size: 16px; color: #555; border-bottom: 3px solid transparent; margin-bottom: -2px; transition: color .3s, border-bottom-color .3s; }
+  .tab-button:hover:not(:disabled) { color: #007bff; }
+  .tab-button.active { color: #007bff; border-bottom-color: #007bff; font-weight: bold; }
+  .tab-button:disabled { color: #aaa; cursor: not-allowed; }
+  .tab-content { display: none; padding: 10px 0; }
+  .tab-content.active { display: block; }
+
+  .controls, .chart-config { margin-bottom: 20px; padding: 15px; background: #e9ecef; border-radius: 6px; }
+  .row { margin-bottom: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row label { font-weight: bold; min-width: 120px; font-size: .9em; }
+  .row input[type="file"], .row select, .row button { padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font-size: .9em; }
+  .row button { background: #28a745; color: #fff; cursor: pointer; margin-left: auto; border-color: #28a745; }
+  .row button:hover { background: #218838; }
+
+  .series-config { border: 1px solid #ced4da; padding: 10px; margin-bottom: 15px; border-radius: 4px; background: #f8f9fa; }
+  .series-config h5 { margin-top: 0; color: #495057; }
+
+  .chart { width: 100%; height: 520px; margin-top: 20px; border: 1px solid #ddd; border-radius: 6px; }
+  .file-load-status { margin-top: 10px; font-style: italic; font-size: .9em; }
+
+  #tableWrap { max-height: 600px; overflow: auto; border: 1px solid #ddd; border-radius: 6px; }
+  #tableWrap table { border-collapse: collapse; width: 100%; font-size: .9em; }
+  #tableWrap th, #tableWrap td { border: 1px solid #e3e3e3; padding: 6px 10px; text-align: left; white-space: nowrap; }
+  #tableWrap td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  #tableWrap th { position: sticky; top: 0; background: #e9ecef; cursor: pointer; user-select: none; z-index: 1; }
+  #tableWrap th:hover { background: #dae0e5; }
+  #tableWrap th[aria-sort]::after { content: ' ▲'; color: #007bff; }
+  #tableWrap th[aria-sort="descending"]::after { content: ' ▼'; }
+  #tableWrap tbody tr:nth-child(even) { background: #fafafa; }
+  #tableFilter { flex: 1; min-width: 200px; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+  .msg { text-align: center; padding: 50px 20px; color: #6c757d; }
+  .msg.error { color: #c82333; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <h2>Excel/CSV 讀取與圖表產生器</h2>
+
+  <div class="tab-bar">
+    <button class="tab-button active" data-tab="loadFileTab">1. 讀取檔案</button>
+    <button class="tab-button" data-tab="dataTableTab" disabled>2. 資料表格</button>
+    <button class="tab-button" data-tab="basicChartTab" disabled>3. 基本圖</button>
+    <button class="tab-button" data-tab="comboChartTab" disabled>4. 組合圖</button>
+    <button class="tab-button" data-tab="budgetTab" disabled>5. 預算決算</button>
+  </div>
+
+  <section id="loadFileTab" class="tab-content active">
+    <h3 class="tab-main-title">步驟 1: 選擇並讀取檔案</h3>
+    <div class="controls">
+      <div class="row">
+        <label for="fileInput">選擇檔案 (Excel/CSV):</label>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv">
+      </div>
+      <div id="fileLoadStatus" class="file-load-status">尚未選擇檔案</div>
+    </div>
+  </section>
+
+  <section id="dataTableTab" class="tab-content">
+    <h3 class="tab-main-title">資料表格</h3>
+    <div class="controls">
+      <div class="row">
+        <label for="tableFilter">關鍵字篩選:</label>
+        <input type="search" id="tableFilter" placeholder="輸入任意欄位的關鍵字…">
+        <span id="tableCount" class="file-load-status"></span>
+      </div>
+    </div>
+    <div id="tableWrap"><p class="msg">請先於「讀取檔案」分頁載入資料。</p></div>
+  </section>
+
+  <section id="basicChartTab" class="tab-content">
+    <h3 class="tab-main-title">基本圖表產生</h3>
+    <div id="basicConfig" class="chart-config" hidden>
+      <h4>圖表設定</h4>
+      <div class="row"><label for="basicX">X 軸 (類別/數值):</label><select id="basicX"></select></div>
+      <div class="row"><label for="basicY">Y 軸 (數值):</label><select id="basicY"></select></div>
+      <div class="row"><label for="basicType">圖表類型:</label>
+        <select id="basicType">
+          <option value="line">折線圖 (Line)</option>
+          <option value="column">直條圖 (Column)</option>
+          <option value="bar">橫條圖 (Bar)</option>
+          <option value="scatter">散佈圖 (Scatter)</option>
+          <option value="area">面積圖 (Area)</option>
+          <option value="pie">圓餅圖 (Pie)</option>
+        </select>
+      </div>
+      <div class="row"><button id="basicGo">產生基本圖</button></div>
+    </div>
+    <div id="basicChart" class="chart"><p class="msg">請先於「讀取檔案」分頁載入資料，然後設定圖表選項。</p></div>
+  </section>
+
+  <section id="comboChartTab" class="tab-content">
+    <h3 class="tab-main-title">組合圖表產生</h3>
+    <div id="comboConfig" class="chart-config" hidden>
+      <h4>圖表設定</h4>
+      <div class="row"><label for="comboX">X 軸 (類別/數值):</label><select id="comboX"></select></div>
+
+      <div class="series-config">
+        <h5>系列 1 設定</h5>
+        <div class="row"><label for="comboY1">Y 軸 (系列 1):</label><select id="comboY1"></select></div>
+        <div class="row"><label for="comboType1">圖表類型 (系列 1):</label>
+          <select id="comboType1">
+            <option value="column">直條圖 (Column)</option>
+            <option value="line">折線圖 (Line)</option>
+            <option value="area">面積圖 (Area)</option>
+            <option value="scatter">散佈圖 (Scatter)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="series-config">
+        <h5>系列 2 設定 (可選)</h5>
+        <div class="row"><label for="comboY2">Y 軸 (系列 2):</label><select id="comboY2"></select></div>
+        <div class="row"><label for="comboType2">圖表類型 (系列 2):</label>
+          <select id="comboType2">
+            <option value="line">折線圖 (Line)</option>
+            <option value="column">直條圖 (Column)</option>
+            <option value="area">面積圖 (Area)</option>
+            <option value="scatter">散佈圖 (Scatter)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row"><button id="comboGo">產生組合圖</button></div>
+    </div>
+    <div id="comboChart" class="chart"><p class="msg">請先於「讀取檔案」分頁載入資料，然後設定圖表選項。</p></div>
+  </section>
+
+  <section id="budgetTab" class="tab-content">
+    <h3 class="tab-main-title">年度預算與決算分析</h3>
+    <div id="budgetConfig" class="chart-config" hidden>
+      <div class="row"><label for="fundSelect">選擇基金別:</label><select id="fundSelect"></select></div>
+      <div class="row"><label for="projectSelect">選擇計畫名稱:</label><select id="projectSelect"></select></div>
+    </div>
+    <div id="budgetChart" class="chart"><p class="msg">請先於「讀取檔案」分頁載入資料。</p></div>
+  </section>
+</div>
+
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+const charts = {};          // containerId -> ECharts instance
+let rows = [];              // [{col: value}]
+let headers = [];
+
+// ---------- Tabs ----------
+document.querySelector('.tab-bar').addEventListener('click', e => {
+  const btn = e.target.closest('.tab-button');
+  if (!btn || btn.disabled) return;
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.toggle('active', el.id === btn.dataset.tab));
+  document.querySelectorAll('.tab-button').forEach(b => b.classList.toggle('active', b === btn));
+  // ECharts 在隱藏容器中量到 0 寬，切回來要重算尺寸
+  Object.values(charts).forEach(c => c.resize());
+});
+window.addEventListener('resize', () => Object.values(charts).forEach(c => c.resize()));
+
+// ---------- Helpers ----------
+const num = v => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[,%\s]/g, ''));
+  return Number.isFinite(n) ? n : null;
+};
+
+function fillSelect(sel, opts, placeholder) {
+  sel.replaceChildren(new Option(placeholder, ''));
+  opts.forEach(h => sel.appendChild(new Option(h, h)));
+}
+
+function showMessage(containerId, text, isError) {
+  charts[containerId]?.dispose();
+  delete charts[containerId];
+  const el = $(containerId);
+  el.replaceChildren();
+  const p = document.createElement('p');
+  p.className = 'msg' + (isError ? ' error' : '');
+  p.textContent = text;
+  el.appendChild(p);
+}
+
+function render(containerId, option) {
+  charts[containerId]?.dispose();
+  const el = $(containerId);
+  el.replaceChildren();
+  const c = echarts.init(el);
+  c.setOption(option);
+  charts[containerId] = c;
+}
+
+// 所有圖表共用的工具列：存圖、看資料表、區域縮放、還原
+const toolbox = {
+  feature: {
+    dataView: { readOnly: true, title: '資料表', lang: ['資料表', '關閉', '重新整理'] },
+    dataZoom: { title: { zoom: '區域縮放', back: '還原縮放' } },
+    saveAsImage: { title: '存成圖片', pixelRatio: 2 },
+    restore: { title: '還原' }
+  }
+};
+
+/** 依圖表類型組出 ECharts series；xField 只在 scatter 用得到。 */
+function buildSeries(name, type, xField, yField) {
+  if (type === 'scatter') {
+    return {
+      name, type: 'scatter',
+      data: rows.map(r => [num(r[xField]), num(r[yField])])
+                .filter(p => p[0] !== null && p[1] !== null)
+    };
+  }
+  const data = rows.map(r => num(r[yField]));
+  if (type === 'area') return { name, type: 'line', areaStyle: {}, data, connectNulls: false };
+  if (type === 'line') return { name, type: 'line', data };
+  return { name, type: 'bar', data };   // column / bar 都是 bar，方向由座標軸決定
+}
+
+// ---------- 讀檔 ----------
+$('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  rows = []; headers = [];
+  $('basicConfig').hidden = $('comboConfig').hidden = $('budgetConfig').hidden = true;
+  document.querySelectorAll('.tab-button:not([data-tab="loadFileTab"])').forEach(b => b.disabled = true);
+  showMessage('basicChart', '請先載入檔案並設定圖表選項。');
+  showMessage('comboChart', '請先載入檔案並設定圖表選項。');
+  showMessage('budgetChart', '請先載入檔案。');
+  showMessage('tableWrap', '請先於「讀取檔案」分頁載入資料。');
+  $('tableFilter').value = '';
+  $('tableCount').textContent = '';
+
+  if (!file) { $('fileLoadStatus').textContent = '未選擇檔案。'; return; }
+  $('fileLoadStatus').textContent = `正在讀取檔案: ${file.name}...`;
+
+  const reader = new FileReader();
+  reader.onerror = () => { $('fileLoadStatus').textContent = '檔案讀取時發生錯誤。'; };
+  reader.onload = ev => {
+    try {
+      // SheetJS 也吃 CSV（含 BOM），所以不需要另一套 CSV parser
+      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) throw new Error('檔案中沒有工作表。');
+
+      const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+      if (matrix.length < 2) throw new Error(`檔案 "${file.name}" 為空或只有標頭。`);
+
+      // 標頭一律取第一列，避免用第一筆資料的 key 而漏掉空白欄
+      headers = matrix[0].map((h, i) => (h === null || h === '') ? `欄位${i + 1}` : String(h).trim());
+      rows = matrix.slice(1).map(arr => Object.fromEntries(headers.map((h, i) => [h, arr[i] ?? null])));
+
+      fillSelect($('basicX'), headers, '--選擇欄位--');
+      fillSelect($('basicY'), headers, '--選擇欄位--');
+      fillSelect($('comboX'), headers, '--選擇欄位--');
+      fillSelect($('comboY1'), headers, '--選擇欄位--');
+      fillSelect($('comboY2'), headers, '--無(系列2)--');
+      $('comboType1').value = 'column';
+      $('comboType2').value = 'line';
+
+      sortState = { col: null, dir: 1 };
+      renderTable();
+
+      $('basicConfig').hidden = $('comboConfig').hidden = false;
+      document.querySelectorAll('.tab-button:not([data-tab="loadFileTab"])').forEach(b => b.disabled = false);
+      setupBudgetTab();   // 欄位不合就會把「預算決算」分頁再關掉，所以要排在啟用之後
+      $('fileLoadStatus').textContent = `檔案 "${file.name}" 載入完成（${rows.length} 筆）。請切換至「基本圖」或「組合圖」分頁設定圖表。`;
+    } catch (err) {
+      console.error('檔案處理錯誤:', err);
+      $('fileLoadStatus').textContent = '檔案處理失敗: ' + err.message;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+// ---------- 資料表格 ----------
+const MAX_TABLE_ROWS = 2000;   // ponytail: 一次全畫，超過就截斷；真要看更多再上虛擬捲動
+let sortState = { col: null, dir: 1 };
+
+function renderTable() {
+  if (!rows.length) return;
+  const kw = $('tableFilter').value.trim().toLowerCase();
+  let view = kw
+    ? rows.filter(r => headers.some(h => String(r[h] ?? '').toLowerCase().includes(kw)))
+    : rows.slice();
+
+  if (sortState.col) {
+    const h = sortState.col, d = sortState.dir;
+    view.sort((a, b) => {
+      const na = num(a[h]), nb = num(b[h]);
+      if (na !== null && nb !== null) return (na - nb) * d;          // 兩邊都是數字就比數值
+      if (na !== null) return -1 * d;
+      if (nb !== null) return 1 * d;
+      return String(a[h] ?? '').localeCompare(String(b[h] ?? ''), 'zh-Hant') * d;
+    });
+  }
+
+  const shown = view.slice(0, MAX_TABLE_ROWS);
+  $('tableCount').textContent = view.length === shown.length
+    ? `共 ${view.length} 筆`
+    : `共 ${view.length} 筆，僅顯示前 ${MAX_TABLE_ROWS} 筆`;
+
+  const table = document.createElement('table');
+  const thead = table.createTHead().insertRow();
+  headers.forEach(h => {
+    const th = document.createElement('th');
+    th.textContent = h;
+    th.dataset.col = h;
+    if (sortState.col === h) th.setAttribute('aria-sort', sortState.dir === 1 ? 'ascending' : 'descending');
+    thead.appendChild(th);
+  });
+  const tbody = table.createTBody();
+  shown.forEach(r => {
+    const tr = tbody.insertRow();
+    headers.forEach(h => {
+      const td = tr.insertCell();
+      const v = r[h];
+      td.textContent = v === null || v === undefined ? '' : String(v);
+      if (num(v) !== null) td.className = 'n';
+    });
+  });
+  $('tableWrap').replaceChildren(table);
+}
+
+$('tableWrap').addEventListener('click', e => {
+  const th = e.target.closest('th[data-col]');
+  if (!th) return;
+  const col = th.dataset.col;
+  sortState = { col, dir: sortState.col === col ? -sortState.dir : 1 };
+  renderTable();
+});
+$('tableFilter').addEventListener('input', renderTable);
+
+// ---------- 預算決算分析（沿用原 code.html 的欄位約定） ----------
+const B = { fund: '基金名稱', project: '計畫名稱', year: '年度', budget: '預算數', actual: '決算數' };
+
+function setupBudgetTab() {
+  const missing = Object.values(B).filter(c => !headers.includes(c));
+  const btn = document.querySelector('.tab-button[data-tab="budgetTab"]');
+  if (missing.length) {
+    $('budgetConfig').hidden = true;
+    btn.disabled = true;
+    showMessage('budgetChart', `此分頁需要欄位：${missing.join('、')}，目前檔案沒有。`, true);
+    return;
+  }
+  const funds = [...new Set(rows.map(r => String(r[B.fund] ?? '')).filter(Boolean))].sort();
+  fillSelect($('fundSelect'), funds, '--全部基金--');
+  populateProjects();
+  $('budgetConfig').hidden = false;
+}
+
+function populateProjects() {
+  const fund = $('fundSelect').value;
+  const projects = [...new Set(
+    rows.filter(r => !fund || String(r[B.fund]) === fund)
+        .map(r => String(r[B.project] ?? '')).filter(Boolean)
+  )].sort();
+  fillSelect($('projectSelect'), projects, '--選擇計畫--');
+  renderBudgetChart();
+}
+
+function renderBudgetChart() {
+  const fund = $('fundSelect').value, project = $('projectSelect').value;
+  if (!project) return showMessage('budgetChart', '請選擇計畫以生成圖表。');
+
+  const data = rows
+    .filter(r => String(r[B.project]) === project && (!fund || String(r[B.fund]) === fund))
+    .sort((a, b) => (num(a[B.year]) ?? Infinity) - (num(b[B.year]) ?? Infinity));   // 無年度者排最後
+
+  if (!data.length) {
+    return showMessage('budgetChart', `在「${fund || '全部基金'}」下，計畫「${project}」沒有資料。`, true);
+  }
+
+  const years = data.map(r => String(r[B.year] ?? ''));
+  const budget = data.map(r => num(r[B.budget]));
+  const actual = data.map(r => num(r[B.actual]));
+  const cBudget = '#7fb3d5', cActual = '#dc3545';
+
+  render('budgetChart', {
+    title: { text: `${project}（${fund || '所有基金'}）- 年度預算與決算分析`, left: 'center' },
+    toolbox,
+    tooltip: { trigger: 'axis', valueFormatter: v => v == null ? '-' : v.toLocaleString('en-US') },
+    legend: { bottom: 0 },
+    grid: { left: 80, right: 40, top: 60, bottom: 60 },
+    xAxis: { type: 'category', name: B.year, data: years },
+    yAxis: { type: 'value', name: '金額', min: 0 },
+    series: [
+      // 兩根 bar 疊在同一格（barGap:'-100%'），決算較窄壓在預算前面
+      { name: B.budget, type: 'bar', data: budget, color: cBudget, barWidth: 40 },
+      { name: B.actual, type: 'bar', data: actual, color: cActual, barWidth: 20, barGap: '-100%' },
+      { name: '預算趨勢', type: 'line', data: budget, color: cBudget, symbol: 'circle' },
+      { name: '決算趨勢', type: 'line', data: actual, color: cActual, symbol: 'diamond' }
+    ]
+  });
+}
+
+$('fundSelect').addEventListener('change', populateProjects);
+$('projectSelect').addEventListener('change', renderBudgetChart);
+
+// ---------- 基本圖 ----------
+$('basicGo').addEventListener('click', () => {
+  const x = $('basicX').value, y = $('basicY').value, type = $('basicType').value;
+  if (!x || !y) return alert('基本圖：請選擇 X 軸和 Y 軸的欄位！');
+  if (!rows.length) return alert('基本圖：沒有可供繪製圖表的資料！');
+
+  try {
+    const title = { text: `基本圖: ${y} 對 ${x}`, left: 'center' };
+
+    if (type === 'pie') {
+      const data = rows.map(r => ({ name: String(r[x] ?? ''), value: num(r[y]) }))
+                       .filter(d => d.value !== null);
+      if (!data.length) return showMessage('basicChart', `欄位「${y}」沒有可用的數值。`, true);
+      return render('basicChart', {
+        title, toolbox, tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+        legend: { type: 'scroll', bottom: 0 },
+        series: [{ name: y, type: 'pie', radius: '60%', center: ['50%', '50%'], data,
+                   label: { formatter: '{b}: {d}%' } }]
+      });
+    }
+
+    const series = [buildSeries(y, type, x, y)];
+    const horizontal = type === 'bar';
+    const valueAxis = { type: 'value', name: y };
+    const catAxis = type === 'scatter'
+      ? { type: 'value', name: x }
+      : { type: 'category', name: x, data: rows.map(r => String(r[x] ?? '')) };
+
+    render('basicChart', {
+      title, toolbox,
+      tooltip: { trigger: type === 'scatter' ? 'item' : 'axis' },
+      legend: { bottom: 0 },
+      grid: { left: 70, right: 40, top: 60, bottom: 60 },
+      xAxis: horizontal ? valueAxis : catAxis,
+      yAxis: horizontal ? catAxis : valueAxis,
+      series
+    });
+  } catch (err) {
+    console.error('繪製基本圖表時發生錯誤:', err);
+    showMessage('basicChart', '繪製基本圖表失敗: ' + err.message, true);
+  }
+});
+
+// ---------- 組合圖 ----------
+$('comboGo').addEventListener('click', () => {
+  const x = $('comboX').value;
+  const y1 = $('comboY1').value, t1 = $('comboType1').value;
+  const y2 = $('comboY2').value, t2 = $('comboType2').value;
+
+  if (!x || !y1) return alert('組合圖：請至少選擇 X 軸和系列 1 的 Y 軸欄位！');
+  if (!rows.length) return alert('組合圖：沒有可供繪製圖表的資料！');
+
+  try {
+    const series = [{ ...buildSeries(y1, t1, x, y1), yAxisIndex: 0 }];
+    const yAxis = [{ type: 'value', name: y1 }];
+    let title = `${y1} 對 ${x}`;
+
+    if (y2) {
+      series.push({ ...buildSeries(y2, t2, x, y2), yAxisIndex: 1 });
+      yAxis.push({ type: 'value', name: y2 });   // 第二軸畫在右側
+      title += ` & ${y2}`;
+    }
+
+    const anyScatter = t1 === 'scatter' || (y2 && t2 === 'scatter');
+    const xAxis = anyScatter
+      ? { type: 'value', name: x }
+      : { type: 'category', name: x, data: rows.map(r => String(r[x] ?? '')) };
+
+    render('comboChart', {
+      title: { text: `組合圖: ${title}`, left: 'center' },
+      toolbox,
+      tooltip: { trigger: anyScatter ? 'item' : 'axis', axisPointer: { type: 'cross' } },
+      legend: { bottom: 0 },
+      grid: { left: 70, right: 70, top: 60, bottom: 60 },
+      xAxis, yAxis, series
+    });
+  } catch (err) {
+    console.error('繪製組合圖表時發生錯誤:', err);
+    showMessage('comboChart', '繪製組合圖表失敗: ' + err.message, true);
+  }
+});
+</script>
+</body>
+</html>
