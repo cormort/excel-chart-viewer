@@ -76,6 +76,9 @@
         <label for="sheetSelect">工作表:</label>
         <select id="sheetSelect"></select>
       </div>
+      <div class="row">
+        <button type="button" id="loadSampleBtn">載入範例資料</button>
+      </div>
       <div id="fileLoadStatus" class="file-load-status">尚未選擇檔案</div>
     </div>
   </section>
@@ -414,6 +417,32 @@ $('fileInput').addEventListener('change', e => {
     }
   };
   reader.readAsArrayBuffer(file);
+});
+
+// ponytail: 內嵌範例資料，讓手邊沒檔案的人也能試功能
+const SAMPLE_CSV = [
+  '基金名稱,計畫名稱,年度,預算數,決算數',
+  '作業基金,校舍整建,111,1200,1100',
+  '作業基金,校舍整建,112,1350,1290',
+  '作業基金,設備汰換,111,800,760',
+  '作業基金,設備汰換,112,900,880',
+  '信託基金,獎助學金,111,1500,1320',
+  '信託基金,獎助學金,112,1600,1580',
+  '信託基金,社區服務,111,600,590',
+  '信託基金,社區服務,112,450,410',
+].join('\n');
+
+$('loadSampleBtn').addEventListener('click', () => {
+  $('sheetRow').hidden = true;
+  resetUi();
+  fileName = '範例資料.csv';
+  try {
+    workbook = XLSX.read(SAMPLE_CSV, { type: 'string' });
+    loadSheet(workbook.SheetNames[0]);
+  } catch (err) {
+    console.error('範例資料載入錯誤:', err);
+    $('fileLoadStatus').textContent = '範例資料載入失敗: ' + err.message;
+  }
 });
 
 $('sheetSelect').addEventListener('change', e => {
