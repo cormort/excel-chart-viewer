@@ -150,8 +150,17 @@
           <option value="scatter">散佈圖 (Scatter)</option>
           <option value="area">面積圖 (Area)</option>
           <option value="pie">圓餅圖 (Pie)</option>
+          <option value="histogram">直方圖 (Histogram)</option>
+          <option value="boxplot">盒鬚圖 (Boxplot)</option>
         </select>
           <span class="chart-help slice-count" id="basicTypeHelp"></span>
+      </div>
+      <div class="row"><label for="basicFit">散佈圖趨勢線:</label>
+        <select id="basicFit">
+          <option value="none">不加</option>
+          <option value="linear">線性迴歸（含 R²）</option>
+        </select>
+        <span class="chart-help slice-count">只作用在散佈圖，會在圖上加一條最小平方法迴歸線並標出方程式與 R²。</span>
       </div>
       <div class="row"><label for="basicSort">類別排序:</label>
         <select id="basicSort">
@@ -445,7 +454,7 @@ function buildSeries(src, name, type, xField, yField, agg, categories) {
 
 /** 多組資料要疊在同一個類別軸上，卻沒選彙總 → 類別對不齊，講清楚而不是硬畫 */
 function needsAgg(groups, type, agg) {
-  return groups.length > 1 && type !== 'scatter' && type !== 'pie' && agg === 'none';
+  return groups.length > 1 && !['scatter', 'pie', 'histogram', 'boxplot'].includes(type) && agg === 'none';
 }
 
 // ---------- 讀檔 ----------
@@ -727,6 +736,8 @@ const CHART_HELP = {
   bar:     '橫條圖：同直條圖，但類別名稱長或項目多時改用它，標籤不會擠成一團。例如：X=計畫名稱（像「校園無障礙設施改善工程」這種長名稱），排出全部二十幾個計畫的執行金額。',
   scatter: '散佈圖：看兩個數值欄位的關聯（例如預算數對決算數），X、Y 都要選數值欄位、彙總選「無」。先用篩選鎖定同一年度，否則同一個計畫會有好幾個點混在一起。例如：X=預算數、Y=決算數，落在對角線下方越遠的計畫，執行率越低。',
   area:    '面積圖：折線圖加上填色，強調累積量或總量的厚度；系列多會互相遮擋，建議只放 1～2 條。例如：X=年度、Y=決算數，凸顯基金逐年支出的總量規模。',
+  histogram: '直方圖：看單一數值欄位的分布形狀（集中在哪、有沒有偏態、有幾個峰）。只需要選 X 軸的數值欄位，Y 軸與彙總都用不到，分箱用 Sturges 公式自動決定。例如：X=決算數，看各計畫的支出規模是集中在小額還是兩極化。',
+  boxplot:   '盒鬚圖：比較幾組資料的分布與離群值。X 選分組欄位、Y 選數值欄位；盒子是四分位數、鬚長 1.5 IQR、超出的點單獨畫出來。例如：X=基金名稱、Y=執行率，看哪個基金的執行率又低又不穩定。',
   pie:     '圓餅圖：看單一時點的佔比，各項加起來要等於一個有意義的整體；超過 6 項或要比較大小請改直條圖。例如：先篩選 年度=112，X=基金名稱、Y=預算數、彙總=加總，看該年度預算在各基金之間的分配比例。',
 };
 
@@ -736,6 +747,56 @@ const CHART_HELP = {
   sel.addEventListener('change', show);
   show();
 });
+
+// ---------- 統計圖用的小工具 ----------
+/** 線性內插分位數（與 Excel PERCENTILE.INC、SPSS 預設一致）。sorted 必須已由小到大。 */
+function quantile(sorted, q) {
+  if (!sorted.length) return null;
+  const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos);
+  return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+/** 盒鬚圖的五個數＋離群值：鬚長取 1.5 IQR 內的最極端實際值。 */
+function boxStats(values) {
+  const v = values.slice().sort((a, b) => a - b);
+  const q1 = quantile(v, .25), q2 = quantile(v, .5), q3 = quantile(v, .75), iqr = q3 - q1;
+  const lowLimit = q1 - 1.5 * iqr, highLimit = q3 + 1.5 * iqr;
+  const inside = v.filter(n => n >= lowLimit && n <= highLimit);
+  return {
+    box: [inside[0] ?? q1, q1, q2, q3, inside[inside.length - 1] ?? q3],
+    outliers: v.filter(n => n < lowLimit || n > highLimit)
+  };
+}
+
+/** 直方圖分箱：Sturges 公式，跟 SPSS 預設接近，箱數限制在 1～30。 */
+function histogram(values) {
+  const min = Math.min(...values), max = Math.max(...values);
+  const k = Math.min(30, Math.max(1, Math.ceil(Math.log2(values.length) + 1)));
+  if (min === max) return { labels: [String(min)], counts: [values.length] };
+  const width = (max - min) / k;
+  const counts = new Array(k).fill(0);
+  values.forEach(v => {
+    const i = v === max ? k - 1 : Math.floor((v - min) / width);   // 最大值歸到最後一箱
+    counts[i]++;
+  });
+  const fmt = n => Number(n.toPrecision(6)).toLocaleString('zh-Hant');
+  return {
+    labels: counts.map((_, i) => `${fmt(min + i * width)}–${fmt(min + (i + 1) * width)}`),
+    counts
+  };
+}
+
+/** 最小平方法迴歸：回傳斜率、截距與 R²。 */
+function linearFit(points) {
+  const n = points.length;
+  const sx = points.reduce((a, p) => a + p[0], 0), sy = points.reduce((a, p) => a + p[1], 0);
+  const mx = sx / n, my = sy / n;
+  let sxy = 0, sxx = 0, syy = 0;
+  points.forEach(([x, y]) => { sxy += (x - mx) * (y - my); sxx += (x - mx) ** 2; syy += (y - my) ** 2; });
+  if (sxx === 0) return null;                      // X 全部一樣，畫不出迴歸線
+  const slope = sxy / sxx;
+  return { slope, intercept: my - slope * mx, r2: syy === 0 ? 1 : (sxy * sxy) / (sxx * syy) };
+}
 
 // ---------- 數值單位與排序 ----------
 const UNIT_LABEL = { '1': '', '1000': '千', '10000': '萬', '1000000': '百萬' };
@@ -793,7 +854,10 @@ $('basicGo').addEventListener('click', () => {
   savePrefs();   // 存下實際畫圖當下的設定，不只是下拉變動的當下
   const x = $('basicX').value, y = $('basicY').value, type = $('basicType').value;
   const agg = $('basicAgg').value;
-  if (!x || !y) return alert('基本圖：請選擇 X 軸和 Y 軸的欄位！');
+  if (type === 'histogram' ? !x : (!x || !y)) {
+    return alert(type === 'histogram' ? '直方圖：請選擇要看分布的 X 軸數值欄位！'
+                                      : '基本圖：請選擇 X 軸和 Y 軸的欄位！');
+  }
   if (!rows.length) return alert('基本圖：沒有可供繪製圖表的資料！');
 
   try {
@@ -819,9 +883,70 @@ $('basicGo').addEventListener('click', () => {
       });
     }
 
+    // 直方圖：看單一數值欄位的分布，只用第一組資料，彙總與 Y 軸都用不到
+    if (type === 'histogram') {
+      const values = groups[0].src.map(r => num(r[x])).filter(v => v !== null);
+      if (!values.length) return showMessage('basicChart', `欄位「${x}」沒有可用的數值。`, true);
+      const { labels, counts } = histogram(values);
+      return render('basicChart', {
+        title: { ...title, text: `直方圖: ${x} 的分布`,
+                 subtext: `${sliceLabel('basic', x)}${sliceLabel('basic', x) ? '　|　' : ''}n = ${values.length}，${counts.length} 個區間` },
+        toolbox, tooltip: { trigger: 'axis' },
+        grid: { left: 70, right: 40, top: 80, bottom: 90 },
+        xAxis: { type: 'category', name: x, data: labels, axisLabel: { rotate: 30 } },
+        yAxis: { type: 'value', name: '次數' },
+        series: [{ name: '次數', type: 'bar', data: counts, barCategoryGap: '2%' }]
+      });
+    }
+
+    // 盒鬚圖：X 是分組欄位、Y 是數值欄位，每組畫五數＋離群值
+    if (type === 'boxplot') {
+      const cats = [...new Set(groups[0].src.map(r => String(r[x] ?? '')))].sort(cmpValue);
+      const boxes = [], outliers = [];
+      cats.forEach((c, i) => {
+        const vals = groups[0].src.filter(r => String(r[x] ?? '') === c)
+                                  .map(r => num(r[y])).filter(v => v !== null);
+        if (!vals.length) return boxes.push([null, null, null, null, null]);
+        const st = boxStats(vals);
+        boxes.push(st.box);
+        st.outliers.forEach(o => outliers.push([i, o]));
+      });
+      if (!boxes.some(b => b[0] !== null)) return showMessage('basicChart', `欄位「${y}」沒有可用的數值。`, true);
+      const fmtBox = formatterOf('basic');
+      return render('basicChart', {
+        title: { ...title, text: `盒鬚圖: ${y} 依 ${x} 分組` },
+        toolbox, tooltip: { trigger: 'item' },
+        grid: { left: 70, right: 40, top: 80, bottom: 60 },
+        xAxis: { type: 'category', name: x, data: cats },
+        yAxis: applyScale({ type: 'value', name: axisName(y, 'basic'), axisLabel: { formatter: fmtBox } }, 'basicYScale'),
+        series: [
+          { name: y, type: 'boxplot', data: boxes },
+          { name: '離群值', type: 'scatter', data: outliers, symbolSize: 6 }
+        ]
+      });
+    }
+
     let categories = categoriesOf(groups, x, type === 'scatter' ? 'none' : agg);
     const series = groups.map(g => buildSeries(g.src, g.label || y, type, x, y, agg, categories));
     if (type !== 'scatter') categories = sortCategories('basic', categories, series);
+
+    // 散佈圖趨勢線：把迴歸線畫成兩點的 line 系列，方程式與 R² 放副標題
+    if (type === 'scatter' && $('basicFit').value === 'linear') {
+      const pts = series.flatMap(se => se.data);
+      const fit = pts.length >= 2 ? linearFit(pts) : null;
+      if (fit) {
+        const xs = pts.map(p => p[0]);
+        const x0 = Math.min(...xs), x1 = Math.max(...xs);
+        series.push({
+          name: '線性趨勢線', type: 'line', symbol: 'none', tooltip: { show: false },
+          data: [[x0, fit.intercept + fit.slope * x0], [x1, fit.intercept + fit.slope * x1]]
+        });
+        const sig = n => Number(n.toPrecision(4));
+        title.subtext = [title.subtext,
+          `y = ${sig(fit.slope)}x ${fit.intercept < 0 ? '-' : '+'} ${sig(Math.abs(fit.intercept))}　R² = ${sig(fit.r2)}`
+        ].filter(Boolean).join('　|　');
+      }
+    }
 
     const fmt = formatterOf('basic');
     const horizontal = type === 'bar';
@@ -975,7 +1100,7 @@ const PREF_IDS = ['basicSliceCol', 'basicSliceVal', 'basicAgg', 'basicX', 'basic
                   'comboSliceCol', 'comboSliceVal', 'comboAgg', 'comboX', 'comboY1', 'comboType1',
                   'comboY2', 'comboType2',
                   'basicXScale', 'basicYScale', 'comboXScale', 'comboY1Scale', 'comboY2Scale',
-                  'basicSort', 'basicUnit', 'comboSort', 'comboUnit'];
+                  'basicSort', 'basicUnit', 'comboSort', 'comboUnit', 'basicFit'];
 
 const prefKey = () => 'excel-chart-viewer:' + headers.join('|');
 
@@ -1013,6 +1138,22 @@ function restorePrefs() {
 
 document.querySelectorAll('#basicConfig select, #comboConfig select')
   .forEach(el => el.addEventListener('change', savePrefs));
+
+// ponytail: 統計函式的最小自我檢查，在 console 打 __selfCheck() 就會跑
+function __selfCheck() {
+  const eq = (a, b, msg) => { if (Math.abs(a - b) > 1e-9) throw new Error(`${msg}: ${a} !== ${b}`); };
+  const v = [1, 2, 3, 4];
+  eq(quantile(v, .5), 2.5, 'median');
+  eq(quantile(v, .25), 1.75, 'q1');                       // 與 Excel PERCENTILE.INC 一致
+  const b = boxStats([1, 2, 3, 4, 100]);
+  eq(b.outliers.length, 1, 'outlier count');
+  eq(b.box[4], 4, 'upper whisker 取 1.5IQR 內的最大實際值');
+  const h = histogram([1, 2, 3, 4, 5, 6, 7, 8]);
+  eq(h.counts.reduce((a, c) => a + c, 0), 8, 'histogram 總次數');
+  const f = linearFit([[1, 2], [2, 4], [3, 6]]);
+  eq(f.slope, 2, 'slope'); eq(f.intercept, 0, 'intercept'); eq(f.r2, 1, 'r2');
+  return 'ok';
+}
 </script>
 </body>
 </html>
