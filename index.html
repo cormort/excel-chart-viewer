@@ -503,8 +503,8 @@ function loadSheet(sheetName) {
   setupBudgetTab();   // 欄位不合就會把「預算決算」分頁再關掉，所以要排在啟用之後
 
   const where = workbook.SheetNames.length > 1 ? `工作表「${sheetName}」` : `檔案 "${fileName}"`;
-  $('fileLoadStatus').textContent =
-    `${where} 載入完成（${rows.length} 筆）。請切換至上方的分頁檢視資料或設定圖表。`;
+  $('fileLoadStatus').textContent = `${where} 載入完成（${rows.length} 筆）。`;
+  document.querySelector('.tab-button[data-tab="dataTableTab"]').click();   // 載完直接看資料
 }
 
 // ---------- 資料表格 ----------
