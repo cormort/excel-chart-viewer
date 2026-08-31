@@ -152,6 +152,7 @@
           <option value="pie">圓餅圖 (Pie)</option>
           <option value="histogram">直方圖 (Histogram)</option>
           <option value="boxplot">盒鬚圖 (Boxplot)</option>
+          <option value="errorbar">平均值長條圖＋誤差線 (Mean ± SE)</option>
         </select>
           <span class="chart-help slice-count" id="basicTypeHelp"></span>
       </div>
@@ -454,7 +455,7 @@ function buildSeries(src, name, type, xField, yField, agg, categories) {
 
 /** 多組資料要疊在同一個類別軸上，卻沒選彙總 → 類別對不齊，講清楚而不是硬畫 */
 function needsAgg(groups, type, agg) {
-  return groups.length > 1 && !['scatter', 'pie', 'histogram', 'boxplot'].includes(type) && agg === 'none';
+  return groups.length > 1 && !['scatter', 'pie', 'histogram', 'boxplot', 'errorbar'].includes(type) && agg === 'none';
 }
 
 // ---------- 讀檔 ----------
@@ -738,6 +739,7 @@ const CHART_HELP = {
   area:    '面積圖：折線圖加上填色，強調累積量或總量的厚度；系列多會互相遮擋，建議只放 1～2 條。例如：X=年度、Y=決算數，凸顯基金逐年支出的總量規模。',
   histogram: '直方圖：看單一數值欄位的分布形狀（集中在哪、有沒有偏態、有幾個峰）。只需要選 X 軸的數值欄位，Y 軸與彙總都用不到，分箱用 Sturges 公式自動決定。例如：X=決算數，看各計畫的支出規模是集中在小額還是兩極化。',
   boxplot:   '盒鬚圖：比較幾組資料的分布與離群值。X 選分組欄位、Y 選數值欄位；盒子是四分位數、鬚長 1.5 IQR、超出的點單獨畫出來。例如：X=基金名稱、Y=執行率，看哪個基金的執行率又低又不穩定。',
+  errorbar:  '平均值長條圖＋誤差線：比較各組的平均值，誤差線是 ±1 標準誤（SD/√n），兩組的誤差線明顯不重疊才比較有話可說。X 選分組欄位、Y 選數值欄位，彙總不用選。例如：X=基金名稱、Y=執行率，比較各基金的平均執行率與其估計精確度。',
   pie:     '圓餅圖：看單一時點的佔比，各項加起來要等於一個有意義的整體；超過 6 項或要比較大小請改直條圖。例如：先篩選 年度=112，X=基金名稱、Y=預算數、彙總=加總，看該年度預算在各基金之間的分配比例。',
 };
 
@@ -766,6 +768,16 @@ function boxStats(values) {
     box: [inside[0] ?? q1, q1, q2, q3, inside[inside.length - 1] ?? q3],
     outliers: v.filter(n => n < lowLimit || n > highLimit)
   };
+}
+
+/** 樣本平均與標準誤（SD 用 n-1，n < 2 時沒有誤差可談，回傳 se = null）。 */
+function meanSE(values) {
+  const n = values.length;
+  if (!n) return null;
+  const mean = values.reduce((a, v) => a + v, 0) / n;
+  if (n < 2) return { mean, se: null, n };
+  const variance = values.reduce((a, v) => a + (v - mean) ** 2, 0) / (n - 1);
+  return { mean, se: Math.sqrt(variance / n), n };
 }
 
 /** 直方圖分箱：Sturges 公式，跟 SPSS 預設接近，箱數限制在 1～30。 */
@@ -922,6 +934,48 @@ $('basicGo').addEventListener('click', () => {
         series: [
           { name: y, type: 'boxplot', data: boxes },
           { name: '離群值', type: 'scatter', data: outliers, symbolSize: 6 }
+        ]
+      });
+    }
+
+    // 平均值長條圖＋誤差線：每個類別畫平均值，誤差線為 ±1 標準誤
+    if (type === 'errorbar') {
+      const cats = [...new Set(groups[0].src.map(r => String(r[x] ?? '')))].sort(cmpValue);
+      const means = [], bars = [];
+      cats.forEach((c, i) => {
+        const vals = groups[0].src.filter(r => String(r[x] ?? '') === c)
+                                  .map(r => num(r[y])).filter(v => v !== null);
+        const st = meanSE(vals);
+        means.push(st ? st.mean : null);
+        if (st && st.se !== null) bars.push([i, st.mean - st.se, st.mean + st.se]);
+      });
+      if (!means.some(m => m !== null)) return showMessage('basicChart', `欄位「${y}」沒有可用的數值。`, true);
+      const fmtE = formatterOf('basic');
+      return render('basicChart', {
+        title: { ...title, text: `平均值 ± 標準誤: ${y} 依 ${x} 分組`,
+                 subtext: [sliceLabel('basic', x, y), '誤差線為 ±1 標準誤（SD/√n），單筆資料的類別不畫誤差線'].filter(Boolean).join('　|　') },
+        toolbox, tooltip: { trigger: 'axis', valueFormatter: fmtE },
+        grid: { left: 70, right: 40, top: 80, bottom: 60 },
+        xAxis: { type: 'category', name: x, data: cats },
+        yAxis: applyScale({ type: 'value', name: axisName(y, 'basic'), axisLabel: { formatter: fmtE } }, 'basicYScale'),
+        series: [
+          { name: `${y} 平均`, type: 'bar', data: means },
+          {
+            name: '±1 標準誤', type: 'custom', tooltip: { show: false }, data: bars, z: 10,
+            // 一根工字線：上蓋、下蓋、中間直線
+            renderItem: (params, api) => {
+              const half = 6;
+              const [cx, yLow] = api.coord([api.value(0), api.value(1)]);
+              const yHigh = api.coord([api.value(0), api.value(2)])[1];
+              const line = (y1, y2, x1, x2) => ({ type: 'line', shape: { x1, y1, x2, y2 },
+                                                  style: { stroke: '#333', lineWidth: 1.5 } });
+              return { type: 'group', children: [
+                line(yLow, yLow, cx - half, cx + half),
+                line(yHigh, yHigh, cx - half, cx + half),
+                line(yLow, yHigh, cx, cx)
+              ] };
+            }
+          }
         ]
       });
     }
@@ -1150,6 +1204,8 @@ function __selfCheck() {
   eq(b.box[4], 4, 'upper whisker 取 1.5IQR 內的最大實際值');
   const h = histogram([1, 2, 3, 4, 5, 6, 7, 8]);
   eq(h.counts.reduce((a, c) => a + c, 0), 8, 'histogram 總次數');
+  const m = meanSE([2, 4, 4, 4, 5, 5, 7, 9]);
+  eq(m.mean, 5, 'mean'); eq(m.se, Math.sqrt(32 / 7 / 8), 'se = SD/√n（SD 用 n-1）');
   const f = linearFit([[1, 2], [2, 4], [3, 6]]);
   eq(f.slope, 2, 'slope'); eq(f.intercept, 0, 'intercept'); eq(f.r2, 1, 'r2');
   return 'ok';
