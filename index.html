@@ -23,13 +23,14 @@
   .tab-content { display: none; padding: 10px 0; }
   .tab-content.active { display: block; }
 
-  .controls, .chart-config { margin-bottom: 20px; padding: 15px; background: #e9ecef; border-radius: 6px; }
+  .controls, .chart-config { margin-bottom: 20px; padding: 16px 18px; background: #f1f3f5; border: 1px solid #e0e4e8; border-radius: 6px; }
   [hidden] { display: none !important; }   /* .row 的 display:flex 會蓋掉 hidden */
-  .row { margin-bottom: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row { margin-bottom: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row:last-child { margin-bottom: 0; }
   .row label { font-weight: bold; min-width: 120px; font-size: .9em; }
   .row input[type="file"], .row select, .row button { padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font-size: .9em; }
-  .row select:not([multiple]) { min-width: 200px; }
-  .row select.scale-select { min-width: 0; width: auto; }
+  .row select:not([multiple]) { width: 220px; }   /* 固定寬度，各列的下拉才對得齊 */
+  .row select.scale-select { width: auto; }
   .row select:focus, .row input:focus { outline: none; border-color: #007bff; box-shadow: 0 0 0 3px rgba(0,123,255,.15); }
   .row select[multiple] { min-width: 200px; padding: 4px; }
   .row select[multiple]:empty { display: none; }   /* 沒選篩選欄位時不留空框 */
@@ -57,7 +58,8 @@
 
   .row.slicer { padding-bottom: 12px; border-bottom: 1px dashed #c3c9cf; }
   .slice-count { font-size: .85em; color: #495057; font-style: italic; }
-  .chart-help { flex: 1 1 100%; margin-left: 130px; }   /* 對齊 label 之後，太長就自己換行 */
+  /* 說明文字擺到控制項右邊的空白處，而不是各佔一整行，設定面板才不會被撐得很長 */
+  .chart-help { flex: 1 1 240px; min-width: 240px; max-width: 52ch; line-height: 1.5; }
   .msg { text-align: center; padding: 50px 20px; color: #6c757d; }
   .msg.error { color: #c82333; }
 </style>
