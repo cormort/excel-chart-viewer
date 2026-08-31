@@ -249,6 +249,15 @@
 
   <section id="budgetTab" class="tab-content">
     <h3 class="tab-main-title">年度預算與決算分析</h3>
+    <div id="budgetMap" class="chart-config">
+      <h4>欄位對應</h4>
+      <div class="row"><label for="mapFund">基金別欄位:</label><select id="mapFund"></select></div>
+      <div class="row"><label for="mapProject">計畫欄位:</label><select id="mapProject"></select></div>
+      <div class="row"><label for="mapYear">年度欄位:</label><select id="mapYear"></select></div>
+      <div class="row"><label for="mapBudget">預算數欄位:</label><select id="mapBudget"></select></div>
+      <div class="row"><label for="mapActual">決算數欄位:</label><select id="mapActual"></select></div>
+      <span class="chart-help slice-count">欄位名稱剛好是 基金名稱／計畫名稱／年度／預算數／決算數 時會自動對應，否則請在這裡指定。</span>
+    </div>
     <div id="budgetConfig" class="chart-config" hidden>
       <div class="row"><label for="fundSelect">選擇基金別:</label><select id="fundSelect"></select></div>
       <div class="row"><label for="projectSelect">選擇計畫名稱:</label><select id="projectSelect"></select></div>
@@ -629,22 +638,39 @@ $('tableWrap').addEventListener('click', e => {
 $('tableFilter').addEventListener('input', renderTable);
 
 // ---------- 預算決算分析（沿用原 code.html 的欄位約定） ----------
-const B = { fund: '基金名稱', project: '計畫名稱', year: '年度', budget: '預算數', actual: '決算數' };
+// 五個角色對應到哪個欄位：檔案的欄位名剛好是預設值就自動帶入，否則由使用者在「欄位對應」指定。
+const B_ROLES = { fund: ['mapFund', '基金別', '基金名稱'], project: ['mapProject', '計畫', '計畫名稱'],
+                  year: ['mapYear', '年度', '年度'], budget: ['mapBudget', '預算數', '預算數'],
+                  actual: ['mapActual', '決算數', '決算數'] };
+const B = new Proxy({}, { get: (_, role) => $(B_ROLES[role][0]).value });
 
 function setupBudgetTab() {
-  const missing = Object.values(B).filter(c => !headers.includes(c));
   const btn = document.querySelector('.tab-button[data-tab="budgetTab"]');
+  for (const [id, , preset] of Object.values(B_ROLES)) {
+    const keep = $(id).value;                       // 換工作表時盡量保留原本的對應
+    fillSelect($(id), headers, '--未指定--');
+    const pick = headers.includes(keep) ? keep : (headers.includes(preset) ? preset : '');
+    if (pick) $(id).value = pick;
+  }
+  btn.disabled = false;
+  $('budgetMap').hidden = false;
+  refreshBudgetTab();
+}
+
+/** 對應齊全才開放下方的基金/計畫選擇，否則說明還缺哪幾個角色。 */
+function refreshBudgetTab() {
+  const missing = Object.entries(B_ROLES).filter(([role]) => !B[role]).map(([, [, label]]) => label);
   if (missing.length) {
     $('budgetConfig').hidden = true;
-    btn.disabled = true;
-    showMessage('budgetChart', `此分頁需要欄位：${missing.join('、')}，目前檔案沒有。`, true);
-    return;
+    return showMessage('budgetChart', `請先指定欄位：${missing.join('、')}。`, true);
   }
   const funds = [...new Set(rows.map(r => String(r[B.fund] ?? '')).filter(Boolean))].sort();
   fillSelect($('fundSelect'), funds, '--全部基金--');
   populateProjects();
   $('budgetConfig').hidden = false;
 }
+
+Object.values(B_ROLES).forEach(([id]) => $(id).addEventListener('change', refreshBudgetTab));
 
 function populateProjects() {
   const fund = $('fundSelect').value;
