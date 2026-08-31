@@ -56,6 +56,7 @@
 
   .row.slicer { padding-bottom: 12px; border-bottom: 1px dashed #c3c9cf; }
   .slice-count { font-size: .85em; color: #495057; font-style: italic; }
+  .chart-help { flex: 1 1 100%; margin-left: 130px; }   /* 對齊 label 之後，太長就自己換行 */
   .msg { text-align: center; padding: 50px 20px; color: #6c757d; }
   .msg.error { color: #c82333; }
 </style>
@@ -133,6 +134,7 @@
           <option value="area">面積圖 (Area)</option>
           <option value="pie">圓餅圖 (Pie)</option>
         </select>
+          <span class="chart-help slice-count" id="basicTypeHelp"></span>
       </div>
       <div class="row"><button id="basicGo">產生基本圖</button></div>
     </div>
@@ -171,6 +173,7 @@
             <option value="area">面積圖 (Area)</option>
             <option value="scatter">散佈圖 (Scatter)</option>
           </select>
+          <span class="chart-help slice-count" id="comboType1Help"></span>
         </div>
       </div>
 
@@ -184,6 +187,7 @@
             <option value="area">面積圖 (Area)</option>
             <option value="scatter">散佈圖 (Scatter)</option>
           </select>
+          <span class="chart-help slice-count" id="comboType2Help"></span>
         </div>
       </div>
 
@@ -626,6 +630,23 @@ function renderBudgetChart() {
 
 $('fundSelect').addEventListener('change', populateProjects);
 $('projectSelect').addEventListener('change', renderBudgetChart);
+
+// ---------- 圖表類型說明 ----------
+const CHART_HELP = {
+  line:    '折線圖：看趨勢。X 軸有順序時（年度、月份）用它，線的斜率就是變化速度。',
+  column:  '直條圖：比大小。X 軸是類別（部門、計畫）且項目不多（約 12 個以內）時最好讀。',
+  bar:     '橫條圖：同直條圖，但類別名稱長或項目多時改用它，標籤不會擠成一團。',
+  scatter: '散佈圖：看兩個數值欄位的關聯（例如預算數對決算數），X 軸要選數值欄位，不要彙總。',
+  area:    '面積圖：折線圖加上填色，強調累積量或總量的厚度；系列多會互相遮擋，建議只放 1～2 條。',
+  pie:     '圓餅圖：看單一時點的佔比，各項加起來要等於一個有意義的整體；超過 6 項或要比較大小請改直條圖。',
+};
+
+['basicType', 'comboType1', 'comboType2'].forEach(id => {
+  const sel = $(id), help = $(id + 'Help');
+  const show = () => { help.textContent = CHART_HELP[sel.value] || ''; };
+  sel.addEventListener('change', show);
+  show();
+});
 
 // ---------- 基本圖 ----------
 $('basicGo').addEventListener('click', () => {
