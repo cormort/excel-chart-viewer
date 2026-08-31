@@ -321,11 +321,15 @@ function sliceGroups(prefix) {
 }
 
 /** 切片與彙總條件放在副標題，避免主標題太長壓到右上角工具列 */
-function sliceLabel(prefix) {
+function sliceLabel(prefix, ...axes) {
   const col = $(prefix + 'SliceCol').value, picked = sliceValues(prefix);
   const agg = $(prefix + 'Agg');
   const parts = [];
   if (picked.length) parts.push(`篩選：${col} = ${picked.join('、')}`);
+  // 篩到只剩一個值、該欄又拿來當軸，那條軸只會有一個類別
+  if (picked.length === 1 && axes.includes(col)) {
+    parts.push(`⚠︎「${col}」已篩選為單一值，該軸僅一個類別`);
+  }
   if (agg.value !== 'none') parts.push(`彙總：${agg.selectedOptions[0].textContent.split(' ')[0]}`);
   return parts.join('　|　');
 }
@@ -638,7 +642,7 @@ $('basicGo').addEventListener('click', () => {
       return showMessage('basicChart', '選了多組篩選值時請一併選擇彙總方式，否則各組的 X 類別無法對齊。', true);
     }
 
-    const title = { text: `基本圖: ${y} 對 ${x}`, subtext: sliceLabel('basic'), left: 'center' };
+    const title = { text: `基本圖: ${y} 對 ${x}`, subtext: sliceLabel('basic', x, y), left: 'center' };
 
     if (type === 'pie') {
       // 圓餅圖只畫第一組；要跨組比較請改用直條或折線
@@ -719,7 +723,7 @@ $('comboGo').addEventListener('click', () => {
       : { type: 'category', name: x, data: categories };
 
     render('comboChart', {
-      title: { text: `組合圖: ${title}`, subtext: sliceLabel('combo'), left: 'center' },
+      title: { text: `組合圖: ${title}`, subtext: sliceLabel('combo', x, y1, y2), left: 'center' },
       toolbox,
       tooltip: { trigger: anyScatter ? 'item' : 'axis', axisPointer: { type: 'cross' } },
       legend: { type: 'scroll', bottom: 0 },
