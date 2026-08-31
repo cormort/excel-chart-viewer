@@ -24,11 +24,18 @@
   .tab-content.active { display: block; }
 
   .controls, .chart-config { margin-bottom: 20px; padding: 15px; background: #e9ecef; border-radius: 6px; }
+  [hidden] { display: none !important; }   /* .row 的 display:flex 會蓋掉 hidden */
   .row { margin-bottom: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .row label { font-weight: bold; min-width: 120px; font-size: .9em; }
   .row input[type="file"], .row select, .row button { padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font-size: .9em; }
+  .row select:not([multiple]) { min-width: 200px; }
+  .row select:focus, .row input:focus { outline: none; border-color: #007bff; box-shadow: 0 0 0 3px rgba(0,123,255,.15); }
+  .row select[multiple] { min-width: 200px; padding: 4px; }
+  .row select[multiple]:empty { display: none; }   /* 沒選篩選欄位時不留空框 */
   .row button { background: #28a745; color: #fff; cursor: pointer; margin-left: auto; border-color: #28a745; }
   .row button:hover { background: #218838; }
+  #loadSampleBtn { margin-left: 0; background: #6c757d; border-color: #6c757d; }
+  #loadSampleBtn:hover { background: #5a6268; }
 
   .series-config { border: 1px solid #ced4da; padding: 10px; margin-bottom: 15px; border-radius: 4px; background: #f8f9fa; }
   .series-config h5 { margin-top: 0; color: #495057; }
