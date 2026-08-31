@@ -29,6 +29,7 @@
   .row label { font-weight: bold; min-width: 120px; font-size: .9em; }
   .row input[type="file"], .row select, .row button { padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: #fff; font-size: .9em; }
   .row select:not([multiple]) { min-width: 200px; }
+  .row select.scale-select { min-width: 0; width: auto; }
   .row select:focus, .row input:focus { outline: none; border-color: #007bff; box-shadow: 0 0 0 3px rgba(0,123,255,.15); }
   .row select[multiple] { min-width: 200px; padding: 4px; }
   .row select[multiple]:empty { display: none; }   /* 沒選篩選欄位時不留空框 */
@@ -123,8 +124,8 @@
         </select>
         <span class="slice-count">X 軸有重複值時，決定同一類別要怎麼合併</span>
       </div>
-      <div class="row"><label for="basicX">X 軸 (類別/數值):</label><select id="basicX"></select></div>
-      <div class="row"><label for="basicY">Y 軸 (數值):</label><select id="basicY"></select></div>
+      <div class="row"><label for="basicX">X 軸 (類別/數值):</label><select id="basicX"></select><select id="basicXScale" class="scale-select" title="座標軸刻度"><option value="value">線性刻度</option><option value="log">對數刻度</option></select></div>
+      <div class="row"><label for="basicY">Y 軸 (數值):</label><select id="basicY"></select><select id="basicYScale" class="scale-select" title="座標軸刻度"><option value="value">線性刻度</option><option value="log">對數刻度</option></select></div>
       <div class="row"><label for="basicType">圖表類型:</label>
         <select id="basicType">
           <option value="line">折線圖 (Line)</option>
@@ -161,11 +162,11 @@
         </select>
         <span class="slice-count">X 軸有重複值時，決定同一類別要怎麼合併</span>
       </div>
-      <div class="row"><label for="comboX">X 軸 (類別/數值):</label><select id="comboX"></select></div>
+      <div class="row"><label for="comboX">X 軸 (類別/數值):</label><select id="comboX"></select><select id="comboXScale" class="scale-select" title="座標軸刻度"><option value="value">線性刻度</option><option value="log">對數刻度</option></select></div>
 
       <div class="series-config">
         <h5>系列 1 設定</h5>
-        <div class="row"><label for="comboY1">Y 軸 (系列 1):</label><select id="comboY1"></select></div>
+        <div class="row"><label for="comboY1">Y 軸 (系列 1):</label><select id="comboY1"></select><select id="comboY1Scale" class="scale-select" title="座標軸刻度"><option value="value">線性刻度</option><option value="log">對數刻度</option></select></div>
         <div class="row"><label for="comboType1">圖表類型 (系列 1):</label>
           <select id="comboType1">
             <option value="column">直條圖 (Column)</option>
@@ -179,7 +180,7 @@
 
       <div class="series-config">
         <h5>系列 2 設定 (可選)</h5>
-        <div class="row"><label for="comboY2">Y 軸 (系列 2):</label><select id="comboY2"></select></div>
+        <div class="row"><label for="comboY2">Y 軸 (系列 2):</label><select id="comboY2"></select><select id="comboY2Scale" class="scale-select" title="座標軸刻度"><option value="value">線性刻度</option><option value="log">對數刻度</option></select></div>
         <div class="row"><label for="comboType2">圖表類型 (系列 2):</label>
           <select id="comboType2">
             <option value="line">折線圖 (Line)</option>
@@ -648,6 +649,24 @@ const CHART_HELP = {
   show();
 });
 
+// ---------- 對數刻度 ----------
+// 只有數值軸能取對數；類別軸（X 放部門/計畫名稱）沒有意義，直接忽略。
+// 對數軸碰到 <= 0 的值 ECharts 會畫不出來，所以先擋下並說明原因。
+function applyScale(axis, selectId) {
+  if ($(selectId).value === 'log' && axis.type === 'value') axis.type = 'log';
+  return axis;
+}
+
+/** 對數軸下若有非正值就回傳錯誤訊息，否則回傳 null。 */
+function logRangeError(series, axisName, selectId, pick) {
+  if ($(selectId).value !== 'log') return null;
+  const bad = series.some(s => s.data.some(d => {
+    const v = pick(d);
+    return v !== null && v !== undefined && v <= 0;
+  }));
+  return bad ? `${axisName}選了對數刻度，但資料中有 0 或負值，對數軸畫不出來。請改回線性刻度。` : null;
+}
+
 // ---------- 基本圖 ----------
 $('basicGo').addEventListener('click', () => {
   savePrefs();   // 存下實際畫圖當下的設定，不只是下拉變動的當下
@@ -683,10 +702,15 @@ $('basicGo').addEventListener('click', () => {
     const series = groups.map(g => buildSeries(g.src, g.label || y, type, x, y, agg, categories));
 
     const horizontal = type === 'bar';
-    const valueAxis = { type: 'value', name: y };
-    const catAxis = type === 'scatter'
+    const valueAxis = applyScale({ type: 'value', name: y }, 'basicYScale');
+    const catAxis = applyScale(type === 'scatter'
       ? { type: 'value', name: x }
-      : { type: 'category', name: x, data: categories };
+      : { type: 'category', name: x, data: categories }, 'basicXScale');
+
+    const isPair = type === 'scatter';
+    const err = logRangeError(series, 'Y 軸', 'basicYScale', d => isPair ? d[1] : d)
+             || (isPair ? logRangeError(series, 'X 軸', 'basicXScale', d => d[0]) : null);
+    if (err) return showMessage('basicChart', err, true);
 
     render('basicChart', {
       title, toolbox,
@@ -729,19 +753,25 @@ $('comboGo').addEventListener('click', () => {
 
     const series = groups.map(g =>
       ({ ...buildSeries(g.src, named(y1, g.label), t1, x, y1, agg, categories), yAxisIndex: 0 }));
-    const yAxis = [{ type: 'value', name: y1 }];
+    const yAxis = [applyScale({ type: 'value', name: y1 }, 'comboY1Scale')];
     let title = `${y1} 對 ${x}`;
 
     if (y2) {
       groups.forEach(g => series.push(
         { ...buildSeries(g.src, named(y2, g.label), t2, x, y2, agg, categories), yAxisIndex: 1 }));
-      yAxis.push({ type: 'value', name: y2 });   // 第二軸畫在右側
+      yAxis.push(applyScale({ type: 'value', name: y2 }, 'comboY2Scale'));   // 第二軸畫在右側
       title += ` & ${y2}`;
     }
 
-    const xAxis = anyScatter
+    const xAxis = applyScale(anyScatter
       ? { type: 'value', name: x }
-      : { type: 'category', name: x, data: categories };
+      : { type: 'category', name: x, data: categories }, 'comboXScale');
+
+    const comboErr =
+         logRangeError(series.filter(s => s.yAxisIndex === 0), 'Y 軸 (系列 1)', 'comboY1Scale', d => Array.isArray(d) ? d[1] : d)
+      || logRangeError(series.filter(s => s.yAxisIndex === 1), 'Y 軸 (系列 2)', 'comboY2Scale', d => Array.isArray(d) ? d[1] : d)
+      || (anyScatter ? logRangeError(series, 'X 軸', 'comboXScale', d => Array.isArray(d) ? d[0] : null) : null);
+    if (comboErr) return showMessage('comboChart', comboErr, true);
 
     render('comboChart', {
       title: { text: `組合圖: ${title}`, subtext: sliceLabel('combo', x, y1, y2), left: 'center' },
@@ -762,7 +792,8 @@ $('comboGo').addEventListener('click', () => {
 // ponytail: 放 localStorage，清瀏覽器資料就沒了；這種便利性設定不值得更重的儲存。
 const PREF_IDS = ['basicSliceCol', 'basicSliceVal', 'basicAgg', 'basicX', 'basicY', 'basicType',
                   'comboSliceCol', 'comboSliceVal', 'comboAgg', 'comboX', 'comboY1', 'comboType1',
-                  'comboY2', 'comboType2'];
+                  'comboY2', 'comboType2',
+                  'basicXScale', 'basicYScale', 'comboXScale', 'comboY1Scale', 'comboY2Scale'];
 
 const prefKey = () => 'excel-chart-viewer:' + headers.join('|');
 
