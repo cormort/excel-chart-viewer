@@ -129,6 +129,7 @@
         <select id="basicSliceCol"></select>
         <select id="basicSliceVal" multiple size="5"></select>
         <span id="basicSliceCount" class="slice-count"></span>
+        <span class="chart-help slice-count">只列出相異值 30 個以內的類別欄位（部門、基金、年度這類），金額欄位篩了沒意義所以不列。</span>
       </div>
       <div class="row slicer">
         <label for="basicAgg">彙總方式:</label>
@@ -194,6 +195,7 @@
         <select id="comboSliceCol"></select>
         <select id="comboSliceVal" multiple size="5"></select>
         <span id="comboSliceCount" class="slice-count"></span>
+        <span class="chart-help slice-count">只列出相異值 30 個以內的類別欄位（部門、基金、年度這類），金額欄位篩了沒意義所以不列。</span>
       </div>
       <div class="row slicer">
         <label for="comboAgg">彙總方式:</label>
@@ -342,9 +344,24 @@ const toolbox = {
 // 統計上這是把 panel data（縱橫資料，多個體 × 多時點）降成一個維度：
 //   固定年度 → 橫斷面 (cross-sectional)；固定計畫 → 時間序列 (time series)。
 // 多選時每個值各自成為一條 series，方便跨組比較。
+/** 適合當篩選欄位的：相異值不多的類別型欄位（部門、基金、年度），
+ *  金額這種幾乎每列都不同的數值欄位篩了也沒用，就不列出來。 */
+const MAX_SLICE_VALUES = 30;
+function slicerFields() {
+  const ok = headers.filter(h => {
+    const vals = rows.map(r => r[h]).filter(v => v !== null && v !== undefined && v !== '');
+    const n = new Set(vals.map(String)).size;
+    if (n < 2 || n > MAX_SLICE_VALUES || n >= rows.length) return false;
+    // 數值欄位還要「重複得夠多」才算類別（年度會重複，金額幾乎每列都不同）
+    const numeric = vals.length > 0 && vals.every(v => num(v) !== null);
+    return numeric ? n <= rows.length / 3 : true;
+  });
+  return ok.length ? ok : headers;   // 全被濾掉時退回全部，總比沒得選好
+}
+
 function initSlicer(prefix) {
   const col = $(prefix + 'SliceCol'), val = $(prefix + 'SliceVal');
-  fillSelect(col, headers, '--不篩選--');
+  fillSelect(col, slicerFields(), '--不篩選--');
   val.replaceChildren();
   val.disabled = true;
 
