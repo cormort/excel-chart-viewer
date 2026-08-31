@@ -99,6 +99,22 @@
         <label for="tableFilter">關鍵字篩選:</label>
         <input type="search" id="tableFilter" placeholder="輸入任意欄位的關鍵字…">
         <span id="tableCount" class="file-load-status"></span>
+        <button type="button" id="exportCsvBtn">匯出目前檢視 (CSV)</button>
+      </div>
+      <div class="row">
+        <label for="calcName">新增計算欄位:</label>
+        <input type="text" id="calcName" placeholder="新欄位名稱，例如 執行率">
+        <select id="calcA"></select>
+        <select id="calcOp">
+          <option value="/">÷</option>
+          <option value="*">×</option>
+          <option value="+">+</option>
+          <option value="-">−</option>
+          <option value="%">佔比 % (A÷B×100)</option>
+        </select>
+        <select id="calcB"></select>
+        <button type="button" id="calcAddBtn">新增欄位</button>
+        <span class="chart-help slice-count">新欄位會加到表格最後，圖表的欄位下拉也會一起更新。</span>
       </div>
     </div>
     <div id="tableWrap"><p class="msg">請先於「讀取檔案」分頁載入資料。</p></div>
@@ -136,6 +152,23 @@
           <option value="pie">圓餅圖 (Pie)</option>
         </select>
           <span class="chart-help slice-count" id="basicTypeHelp"></span>
+      </div>
+      <div class="row"><label for="basicSort">類別排序:</label>
+        <select id="basicSort">
+          <option value="none">原順序</option>
+          <option value="desc">依數值由大到小</option>
+          <option value="asc">依數值由小到大</option>
+        </select>
+        <span class="chart-help slice-count">只作用在類別軸（散佈圖不適用）；多組篩選時依第一組的值排。</span>
+      </div>
+      <div class="row"><label for="basicUnit">數值單位:</label>
+        <select id="basicUnit">
+          <option value="1">原值（千分位）</option>
+          <option value="1000">千元</option>
+          <option value="10000">萬元</option>
+          <option value="1000000">百萬元</option>
+        </select>
+        <span class="chart-help slice-count">只影響座標軸與提示框的顯示，原始資料不變。</span>
       </div>
       <div class="row"><button id="basicGo">產生基本圖</button></div>
     </div>
@@ -192,6 +225,23 @@
         </div>
       </div>
 
+      <div class="row"><label for="comboSort">類別排序:</label>
+        <select id="comboSort">
+          <option value="none">原順序</option>
+          <option value="desc">依數值由大到小</option>
+          <option value="asc">依數值由小到大</option>
+        </select>
+        <span class="chart-help slice-count">只作用在類別軸（散佈圖不適用）；多組篩選時依第一組的值排。</span>
+      </div>
+      <div class="row"><label for="comboUnit">數值單位:</label>
+        <select id="comboUnit">
+          <option value="1">原值（千分位）</option>
+          <option value="1000">千元</option>
+          <option value="10000">萬元</option>
+          <option value="1000000">百萬元</option>
+        </select>
+        <span class="chart-help slice-count">只影響座標軸與提示框的顯示，原始資料不變。</span>
+      </div>
       <div class="row"><button id="comboGo">產生組合圖</button></div>
     </div>
     <div id="comboChart" class="chart"><p class="msg">請先於「讀取檔案」分頁載入資料，然後設定圖表選項。</p></div>
@@ -471,6 +521,17 @@ $('sheetSelect').addEventListener('change', e => {
   }
 });
 
+/** 依目前 headers 重建所有欄位下拉（載入工作表、新增計算欄位後都要呼叫）。 */
+function fillFieldSelects() {
+  fillSelect($('basicX'), headers, '--選擇欄位--');
+  fillSelect($('basicY'), headers, '--選擇欄位--');
+  fillSelect($('comboX'), headers, '--選擇欄位--');
+  fillSelect($('comboY1'), headers, '--選擇欄位--');
+  fillSelect($('comboY2'), headers, '--無(系列2)--');
+  fillSelect($('calcA'), headers, '--選擇欄位--');
+  fillSelect($('calcB'), headers, '--選擇欄位--');
+}
+
 /** 把某個工作表讀成 headers / rows，並重建所有分頁的控制項。 */
 function loadSheet(sheetName) {
   const ws = workbook.Sheets[sheetName];
@@ -483,11 +544,7 @@ function loadSheet(sheetName) {
   headers = matrix[0].map((h, i) => (h === null || h === '') ? `欄位${i + 1}` : String(h).trim());
   rows = matrix.slice(1).map(arr => Object.fromEntries(headers.map((h, i) => [h, arr[i] ?? null])));
 
-  fillSelect($('basicX'), headers, '--選擇欄位--');
-  fillSelect($('basicY'), headers, '--選擇欄位--');
-  fillSelect($('comboX'), headers, '--選擇欄位--');
-  fillSelect($('comboY1'), headers, '--選擇欄位--');
-  fillSelect($('comboY2'), headers, '--無(系列2)--');
+  fillFieldSelects();
   $('comboType1').value = 'column';
   $('comboType2').value = 'line';
   $('basicAgg').value = $('comboAgg').value = 'none';
@@ -512,8 +569,8 @@ function loadSheet(sheetName) {
 const MAX_TABLE_ROWS = 2000;   // ponytail: 一次全畫，超過就截斷；真要看更多再上虛擬捲動
 let sortState = { col: null, dir: 1 };
 
-function renderTable() {
-  if (!rows.length) return;
+/** 表格目前實際顯示的列（套用關鍵字篩選與排序），匯出 CSV 也用這份。 */
+function tableView() {
   const kw = $('tableFilter').value.trim().toLowerCase();
   let view = kw
     ? rows.filter(r => headers.some(h => String(r[h] ?? '').toLowerCase().includes(kw)))
@@ -529,7 +586,12 @@ function renderTable() {
       return String(a[h] ?? '').localeCompare(String(b[h] ?? ''), 'zh-Hant') * d;
     });
   }
+  return view;
+}
 
+function renderTable() {
+  if (!rows.length) return;
+  const view = tableView();
   const shown = view.slice(0, MAX_TABLE_ROWS);
   $('tableCount').textContent = view.length === shown.length
     ? `共 ${view.length} 筆`
@@ -649,6 +711,39 @@ const CHART_HELP = {
   show();
 });
 
+// ---------- 數值單位與排序 ----------
+const UNIT_LABEL = { '1': '', '1000': '千', '10000': '萬', '1000000': '百萬' };
+
+/** 依「數值單位」下拉產生格式化函式：除以單位並加千分位。 */
+function formatterOf(prefix) {
+  const div = Number($(prefix + 'Unit').value) || 1;
+  return v => {
+    const n = num(v);
+    if (n === null) return '';
+    const scaled = n / div;
+    return scaled.toLocaleString('zh-Hant', { maximumFractionDigits: div === 1 ? 2 : 2 });
+  };
+}
+
+/** 單位不是 1 時，把單位字樣掛到軸名後面，才知道刻度在講什麼。 */
+function axisName(name, prefix) {
+  const u = UNIT_LABEL[$(prefix + 'Unit').value];
+  return u ? `${name}（${u}）` : name;
+}
+
+/** 依第一組序列的值重排類別軸；散佈圖與圓餅圖不適用。 */
+function sortCategories(prefix, categories, series) {
+  const mode = $(prefix + 'Sort').value;
+  if (mode === 'none' || !categories.length || !series.length) return categories;
+  const first = series[0].data;
+  const idx = categories.map((c, i) => i).sort((a, b) => {
+    const va = num(first[a]) ?? -Infinity, vb = num(first[b]) ?? -Infinity;
+    return mode === 'desc' ? vb - va : va - vb;
+  });
+  series.forEach(se => { se.data = idx.map(i => se.data[i]); });
+  return idx.map(i => categories[i]);
+}
+
 // ---------- 對數刻度 ----------
 // 只有數值軸能取對數；類別軸（X 放部門/計畫名稱）沒有意義，直接忽略。
 // 對數軸碰到 <= 0 的值 ECharts 會畫不出來，所以先擋下並說明原因。
@@ -698,13 +793,16 @@ $('basicGo').addEventListener('click', () => {
       });
     }
 
-    const categories = categoriesOf(groups, x, type === 'scatter' ? 'none' : agg);
+    let categories = categoriesOf(groups, x, type === 'scatter' ? 'none' : agg);
     const series = groups.map(g => buildSeries(g.src, g.label || y, type, x, y, agg, categories));
+    if (type !== 'scatter') categories = sortCategories('basic', categories, series);
 
+    const fmt = formatterOf('basic');
     const horizontal = type === 'bar';
-    const valueAxis = applyScale({ type: 'value', name: y }, 'basicYScale');
+    const valueAxis = applyScale(
+      { type: 'value', name: axisName(y, 'basic'), axisLabel: { formatter: fmt } }, 'basicYScale');
     const catAxis = applyScale(type === 'scatter'
-      ? { type: 'value', name: x }
+      ? { type: 'value', name: axisName(x, 'basic'), axisLabel: { formatter: fmt } }
       : { type: 'category', name: x, data: categories }, 'basicXScale');
 
     const isPair = type === 'scatter';
@@ -714,7 +812,7 @@ $('basicGo').addEventListener('click', () => {
 
     render('basicChart', {
       title, toolbox,
-      tooltip: { trigger: type === 'scatter' ? 'item' : 'axis' },
+      tooltip: { trigger: type === 'scatter' ? 'item' : 'axis', valueFormatter: fmt },
       legend: { type: 'scroll', bottom: 0 },
       grid: { left: 70, right: 40, top: 80, bottom: 60 },
       xAxis: horizontal ? valueAxis : catAxis,
@@ -747,24 +845,29 @@ $('comboGo').addEventListener('click', () => {
       return showMessage('comboChart', '選了多組篩選值時請一併選擇彙總方式，否則各組的 X 類別無法對齊。', true);
     }
 
-    const categories = categoriesOf(groups, x, anyScatter ? 'none' : agg);
+    let categories = categoriesOf(groups, x, anyScatter ? 'none' : agg);
+    const fmt = formatterOf('combo');
     // 只有一組時就用欄位名當系列名，多組才加上組別後綴
     const named = (yField, label) => groups.length > 1 ? `${yField} (${label})` : yField;
 
     const series = groups.map(g =>
       ({ ...buildSeries(g.src, named(y1, g.label), t1, x, y1, agg, categories), yAxisIndex: 0 }));
-    const yAxis = [applyScale({ type: 'value', name: y1 }, 'comboY1Scale')];
+    const yAxis = [applyScale(
+      { type: 'value', name: axisName(y1, 'combo'), axisLabel: { formatter: fmt } }, 'comboY1Scale')];
     let title = `${y1} 對 ${x}`;
 
     if (y2) {
       groups.forEach(g => series.push(
         { ...buildSeries(g.src, named(y2, g.label), t2, x, y2, agg, categories), yAxisIndex: 1 }));
-      yAxis.push(applyScale({ type: 'value', name: y2 }, 'comboY2Scale'));   // 第二軸畫在右側
+      yAxis.push(applyScale(
+        { type: 'value', name: axisName(y2, 'combo'), axisLabel: { formatter: fmt } }, 'comboY2Scale'));   // 第二軸畫在右側
       title += ` & ${y2}`;
     }
 
+    if (!anyScatter) categories = sortCategories('combo', categories, series);
+
     const xAxis = applyScale(anyScatter
-      ? { type: 'value', name: x }
+      ? { type: 'value', name: axisName(x, 'combo'), axisLabel: { formatter: fmt } }
       : { type: 'category', name: x, data: categories }, 'comboXScale');
 
     const comboErr =
@@ -776,7 +879,7 @@ $('comboGo').addEventListener('click', () => {
     render('comboChart', {
       title: { text: `組合圖: ${title}`, subtext: sliceLabel('combo', x, y1, y2), left: 'center' },
       toolbox,
-      tooltip: { trigger: anyScatter ? 'item' : 'axis', axisPointer: { type: 'cross' } },
+      tooltip: { trigger: anyScatter ? 'item' : 'axis', axisPointer: { type: 'cross' }, valueFormatter: fmt },
       legend: { type: 'scroll', bottom: 0 },
       grid: { left: 70, right: 70, top: 80, bottom: 60 },
       xAxis, yAxis, series
@@ -787,13 +890,66 @@ $('comboGo').addEventListener('click', () => {
   }
 });
 
+// ---------- 計算欄位 ----------
+// ponytail: 只做「A 運算 B」兩欄運算，不做公式解析器；要更複雜的請在 Excel 算好再匯入。
+$('calcAddBtn').addEventListener('click', () => {
+  const name = $('calcName').value.trim();
+  const a = $('calcA').value, b = $('calcB').value, op = $('calcOp').value;
+  if (!name) return alert('請輸入新欄位名稱。');
+  if (headers.includes(name)) return alert(`欄位「${name}」已經存在，請換一個名稱。`);
+  if (!a || !b) return alert('請選擇要運算的兩個欄位。');
+
+  const calc = (x, y) => {
+    if (x === null || y === null) return null;
+    switch (op) {
+      case '+': return x + y;
+      case '-': return x - y;
+      case '*': return x * y;
+      case '/': return y === 0 ? null : x / y;          // 除以 0 留空，不要 Infinity
+      case '%': return y === 0 ? null : x / y * 100;
+    }
+  };
+  const round2 = v => v === null ? null : Math.round(v * 100) / 100;
+
+  rows.forEach(r => { r[name] = round2(calc(num(r[a]), num(r[b]))); });
+  headers.push(name);
+
+  fillFieldSelects();
+  restorePrefs();      // 重建下拉會清掉選擇，補回來
+  initSlicer('basic');
+  initSlicer('combo');
+  renderTable();
+  setupBudgetTab();
+  $('calcName').value = '';
+});
+
+// ---------- 匯出目前檢視 ----------
+// 匯出的是「資料表格」分頁上看到的內容：套用關鍵字篩選與排序後的列。
+$('exportCsvBtn').addEventListener('click', () => {
+  if (!rows.length) return alert('沒有可匯出的資料。');
+  const cell = v => {
+    const t = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const view = tableView();
+  const csv = [headers.map(cell).join(','),
+               ...view.map(r => headers.map(h => cell(r[h])).join(','))].join('\n');
+
+  const url = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
+  const a = Object.assign(document.createElement('a'),
+    { href: url, download: (fileName || '資料').replace(/\.[^.]+$/, '') + '_目前檢視.csv' });
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
 // ---------- 記住上次的選擇 ----------
 // 以「欄位組合」當 key，換到同樣格式的檔案時自動還原設定。
 // ponytail: 放 localStorage，清瀏覽器資料就沒了；這種便利性設定不值得更重的儲存。
 const PREF_IDS = ['basicSliceCol', 'basicSliceVal', 'basicAgg', 'basicX', 'basicY', 'basicType',
                   'comboSliceCol', 'comboSliceVal', 'comboAgg', 'comboX', 'comboY1', 'comboType1',
                   'comboY2', 'comboType2',
-                  'basicXScale', 'basicYScale', 'comboXScale', 'comboY1Scale', 'comboY2Scale'];
+                  'basicXScale', 'basicYScale', 'comboXScale', 'comboY1Scale', 'comboY2Scale',
+                  'basicSort', 'basicUnit', 'comboSort', 'comboUnit'];
 
 const prefKey = () => 'excel-chart-viewer:' + headers.join('|');
 
